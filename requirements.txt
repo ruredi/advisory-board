@@ -1,0 +1,14 @@
+pyyaml>=6.0
+httpx>=0.27
+feedparser>=6.0
+trafilatura>=1.12
+lxml_html_clean>=0.4.0
+pymupdf>=1.24
+yt-dlp>=2024.12
+numpy>=1.26
+google-genai>=1.0
+qdrant-client>=1.16,<1.17
+scrapfly-sdk>=0.8
+jmespath>=1.0
+fastapi>=0.115
+uvicorn[standard]>=0.30

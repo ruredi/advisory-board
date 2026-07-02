@@ -1,0 +1,22 @@
+[
+  {
+    "query": "weak offer diagnosis",
+    "expect_any": ["offer", "value", "diagnos"]
+  },
+  {
+    "query": "Value Equation steps",
+    "expect_any": ["value equation", "dream outcome", "likelihood", "time delay", "effort"]
+  },
+  {
+    "query": "how to increase perceived value",
+    "expect_any": ["perceived", "value", "likelihood", "offer"]
+  },
+  {
+    "query": "when to raise prices",
+    "expect_any": ["price", "pricing", "offer", "value"]
+  },
+  {
+    "query": "how to diagnose poor conversion",
+    "expect_any": ["conversion", "offer", "value", "traffic"]
+  }
+]

@@ -1,0 +1,75 @@
+persona_id: hormozi
+display_name: Alex Hormozi
+
+seed_link_files:
+  - docs/notebooklm-forrasok/alex-hormozi/alex-hormozi-linkek.txt
+
+speaker_names:
+  - Alex Hormozi
+  - Hormozi
+
+allowed_domains:
+  - acquisition.com
+  - hormozi.blog
+  - youtube.com
+  - youtu.be
+  - podcasts.apple.com
+  - open.spotify.com
+  - pocketcasts.com
+
+watch_feeds:
+  - type: youtube_channel
+    url: https://www.youtube.com/@AlexHormozi
+    label: Alex Hormozi YouTube
+  - type: rss
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCUyDOdBWhC1MCxEjC46d-zw
+    label: Alex Hormozi YouTube RSS
+  - type: web
+    url: https://www.acquisition.com/
+    label: Acquisition.com homepage
+
+# Social media — Scrapfly (SCRAPFLY_KEY required)
+social_profiles:
+  - platform: x
+    username: alexhormozi
+    max_posts: 50
+  - platform: instagram
+    username: hormozi
+    max_posts: 50
+
+min_confidence: weak
+embedding_model: text-embedding-3-small
+extraction_model: gemini-2.5-flash
+transcription_model: gemini-2.5-flash
+vision_model: gemini-2.5-flash
+
+# Vector search: SQLite = metadata, Qdrant = embeddings
+vector_store: qdrant
+# Leave empty for embedded local Qdrant at memory/qdrant/
+# Or set QDRANT_URL=http://localhost:6333 when using docker compose
+qdrant_url: http://localhost:6333
+
+source_natures:
+  - written
+  - natural_spoken
+  - performed_spoken
+  - written_performed_as_speech
+  - visual
+  - mixed
+  - uncertain
+
+content_types:
+  - principle
+  - framework
+  - process
+  - step_by_step
+  - diagnostic_logic
+  - example
+  - case_study
+  - quote
+  - story
+  - warning
+  - visual_framework
+  - table
+  - diagram
+  - transcript_chunk

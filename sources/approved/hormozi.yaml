@@ -1,0 +1,54 @@
+persona_id: hormozi
+reviewed_at: '2026-07-02T13:39:44.712462+00:00'
+reviewed_by: terminal
+sources:
+- url: https://youtube.com/@AlexHormozi
+  platform: youtube
+  confidence: 0.98
+  discovery_source: official_site
+  username: alexhormozi
+  signals:
+  - allowed_domain
+  - official_site
+  - platform:youtube
+  - seed_file
+  - watch_feed
+  status: approved
+- url: https://x.com/alexhormozi
+  platform: x
+  confidence: 0.96
+  discovery_source: official_site
+  username: alexhormozi
+  signals:
+  - official_site
+  - platform:x
+  - seed_file
+  status: approved
+- url: https://facebook.com/ahormozi
+  platform: facebook
+  confidence: 0.9
+  discovery_source: seed_file
+  username: ahormozi
+  signals:
+  - seed_file
+  - platform:facebook
+  - facebook_profile
+  status: approved
+- url: https://instagram.com/hormozi
+  platform: instagram
+  confidence: 0.9
+  discovery_source: seed_file
+  username: hormozi
+  signals:
+  - seed_file
+  - platform:instagram
+  status: approved
+- url: https://linkedin.com/in/alexhormozi
+  platform: linkedin
+  confidence: 0.9
+  discovery_source: seed_file
+  username: alexhormozi
+  signals:
+  - seed_file
+  - platform:linkedin
+  status: approved

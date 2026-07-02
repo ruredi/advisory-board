@@ -1,0 +1,15 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+memory/*.sqlite
+memory/*.sqlite-wal
+memory/*.sqlite-shm
+memory/*.log
+logs/
+memory/qdrant/
+memory/qdrant-server/
+sources/raw/
+sources/processed/
+sources/candidates/
+.DS_Store

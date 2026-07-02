@@ -1,0 +1,479 @@
+from __future__ import annotations
+
+import hashlib
+import re
+import sqlite3
+from pathlib import Path
+from typing import Iterable
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+from memory_builder.models import KnowledgeUnit, SourceRecord, SourceStatus, json_dumps, json_loads
+from memory_builder.paths import db_path, project_root
+from memory_builder.pipeline.platform_filter import platform_sql_filter
+
+
+class SQLiteStore:
+    def __init__(self, persona_id: str, root: Path | None = None) -> None:
+        self.persona_id = persona_id
+        self.root = root or project_root()
+        self.path = db_path(persona_id, self.root)
+        self._conn: sqlite3.Connection | None = None
+
+    def connect(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(self.path)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA foreign_keys = ON")
+        return self._conn
+
+    def initialize(self) -> None:
+        schema_path = Path(__file__).resolve().parents[1] / "schema.sql"
+        conn = self.connect()
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sources' LIMIT 1"
+        ).fetchone():
+            self._migrate_schema(conn)
+        conn.executescript(schema_path.read_text(encoding="utf-8"))
+        self._migrate_schema(conn)
+        conn.commit()
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(sources)").fetchall()}
+        if "channel_url" not in columns:
+            conn.execute("ALTER TABLE sources ADD COLUMN channel_url TEXT")
+        if "normalized_title" not in columns:
+            conn.execute("ALTER TABLE sources ADD COLUMN normalized_title TEXT")
+        sync_columns = {row[1] for row in conn.execute("PRAGMA table_info(sync_runs)").fetchall()}
+        if sync_columns and "cost_usd" not in sync_columns:
+            conn.execute("ALTER TABLE sync_runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS pipeline_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                persona_id TEXT NOT NULL,
+                run_id INTEGER,
+                source_id INTEGER,
+                stage TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_pipeline_events_run ON pipeline_events(run_id, id);
+            CREATE INDEX IF NOT EXISTS idx_pipeline_events_persona_created ON pipeline_events(persona_id, created_at);
+            CREATE TABLE IF NOT EXISTS api_usage_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                persona_id TEXT NOT NULL,
+                run_id INTEGER,
+                source_id INTEGER,
+                provider TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                api_credits REAL NOT NULL DEFAULT 0,
+                cost_usd REAL NOT NULL DEFAULT 0,
+                is_estimated INTEGER NOT NULL DEFAULT 1,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_usage_persona_created ON api_usage_logs(persona_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_api_usage_run ON api_usage_logs(run_id);
+            CREATE INDEX IF NOT EXISTS idx_api_usage_provider ON api_usage_logs(persona_id, provider);
+            """
+        )
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def upsert_source(self, source: SourceRecord) -> int:
+        conn = self.connect()
+        conn.execute(
+            """
+            INSERT INTO sources (
+                persona_id, source_title, source_url, source_type, source_date,
+                discovered_at, processed_at, content_hash, status, speaker,
+                source_nature, raw_path, error_message, channel_url, normalized_title
+            ) VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(persona_id, source_url) DO UPDATE SET
+                source_title = excluded.source_title,
+                source_type = excluded.source_type,
+                source_date = COALESCE(excluded.source_date, sources.source_date),
+                content_hash = COALESCE(excluded.content_hash, sources.content_hash),
+                status = CASE
+                    WHEN sources.status IN ('indexed', 'processed', 'skipped') AND excluded.status = 'pending'
+                    THEN sources.status
+                    ELSE excluded.status
+                END,
+                speaker = COALESCE(excluded.speaker, sources.speaker),
+                source_nature = COALESCE(excluded.source_nature, sources.source_nature),
+                raw_path = COALESCE(excluded.raw_path, sources.raw_path),
+                channel_url = COALESCE(excluded.channel_url, sources.channel_url),
+                normalized_title = COALESCE(excluded.normalized_title, sources.normalized_title),
+                error_message = excluded.error_message
+            """,
+            (
+                source.persona_id,
+                source.source_title,
+                source.source_url,
+                source.source_type,
+                source.source_date,
+                source.discovered_at,
+                source.processed_at,
+                source.content_hash,
+                source.status,
+                source.speaker,
+                source.source_nature,
+                source.raw_path,
+                source.error_message,
+                source.channel_url,
+                source.normalized_title,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id FROM sources WHERE persona_id = ? AND source_url = ?",
+            (source.persona_id, source.source_url),
+        ).fetchone()
+        return int(row["id"])
+
+    def get_source_by_url(self, source_url: str) -> sqlite3.Row | None:
+        return self.connect().execute(
+            "SELECT * FROM sources WHERE persona_id = ? AND source_url = ?",
+            (self.persona_id, source_url),
+        ).fetchone()
+
+    def list_sources(self, status: str | None = None, limit: int | None = None) -> list[sqlite3.Row]:
+        query = "SELECT * FROM sources WHERE persona_id = ?"
+        params: list[object] = [self.persona_id]
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY id ASC"
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+        return list(self.connect().execute(query, params).fetchall())
+
+    def list_pending_sources_ordered(
+        self,
+        *,
+        include_failed: bool = False,
+        channel_url: str | None = None,
+        platform: str | None = None,
+        limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        statuses = [SourceStatus.PENDING]
+        if include_failed:
+            statuses.append(SourceStatus.FAILED)
+        placeholders = ",".join("?" for _ in statuses)
+        query = f"""
+            SELECT * FROM sources
+            WHERE persona_id = ?
+              AND status IN ({placeholders})
+        """
+        params: list[object] = [self.persona_id, *statuses]
+        if channel_url:
+            query += " AND channel_url = ?"
+            params.append(channel_url)
+        platform_clause, platform_params = platform_sql_filter(platform)
+        query += platform_clause
+        params.extend(platform_params)
+        query += """
+            ORDER BY
+                CASE source_type
+                    WHEN 'youtube' THEN 1
+                    WHEN 'podcast' THEN 2
+                    ELSE 3
+                END,
+                source_date IS NULL,
+                source_date DESC,
+                id ASC
+        """
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        return list(self.connect().execute(query, params).fetchall())
+
+    def update_source_metadata(
+        self,
+        source_id: int,
+        *,
+        source_title: str | None = None,
+        source_date: str | None = None,
+        normalized_title: str | None = None,
+    ) -> None:
+        conn = self.connect()
+        conn.execute(
+            """
+            UPDATE sources SET
+                source_title = COALESCE(?, source_title),
+                source_date = COALESCE(?, source_date),
+                normalized_title = COALESCE(?, normalized_title)
+            WHERE id = ?
+            """,
+            (source_title, source_date, normalized_title, source_id),
+        )
+        conn.commit()
+
+    def update_source_status(
+        self,
+        source_id: int,
+        status: str,
+        *,
+        processed_at: str | None = None,
+        raw_path: str | None = None,
+        content_hash: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        conn = self.connect()
+        conn.execute(
+            """
+            UPDATE sources SET
+                status = ?,
+                processed_at = COALESCE(?, processed_at),
+                raw_path = COALESCE(?, raw_path),
+                content_hash = COALESCE(?, content_hash),
+                error_message = ?
+            WHERE id = ?
+            """,
+            (status, processed_at, raw_path, content_hash, error_message, source_id),
+        )
+        conn.commit()
+
+    def insert_knowledge_unit(self, unit: KnowledgeUnit) -> int:
+        row = unit.to_row()
+        conn = self.connect()
+        cursor = conn.execute(
+            """
+            INSERT INTO knowledge_units (
+                persona_id, source_id, content_type, chunk_text, visual_description,
+                topics, frameworks, processes, steps, concepts, advice_contexts,
+                examples, quotes, confidence, retrieval_priority, is_new_information,
+                duplicate_of, speaker, source_nature, evidence_type, content_fingerprint
+            ) VALUES (
+                :persona_id, :source_id, :content_type, :chunk_text, :visual_description,
+                :topics, :frameworks, :processes, :steps, :concepts, :advice_contexts,
+                :examples, :quotes, :confidence, :retrieval_priority, :is_new_information,
+                :duplicate_of, :speaker, :source_nature, :evidence_type, :content_fingerprint
+            )
+            """,
+            {**row, "content_fingerprint": content_fingerprint(unit)},
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+    def find_unit_by_fingerprint(self, fingerprint: str) -> int | None:
+        row = self.connect().execute(
+            "SELECT id FROM knowledge_units WHERE persona_id = ? AND content_fingerprint = ?",
+            (self.persona_id, fingerprint),
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+    def list_knowledge_units(self, limit: int | None = None) -> list[sqlite3.Row]:
+        query = "SELECT * FROM knowledge_units WHERE persona_id = ? ORDER BY id ASC"
+        params: list[object] = [self.persona_id]
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+        return list(self.connect().execute(query, params).fetchall())
+
+    def row_to_knowledge_unit(self, row: sqlite3.Row) -> KnowledgeUnit:
+        return KnowledgeUnit(
+            id=row["id"],
+            persona_id=row["persona_id"],
+            source_id=row["source_id"],
+            content_type=row["content_type"],
+            chunk_text=row["chunk_text"],
+            visual_description=row["visual_description"],
+            topics=json_loads(row["topics"]),
+            frameworks=json_loads(row["frameworks"]),
+            processes=json_loads(row["processes"]),
+            steps=json_loads(row["steps"]),
+            concepts=json_loads(row["concepts"]),
+            advice_contexts=json_loads(row["advice_contexts"]),
+            examples=json_loads(row["examples"]),
+            quotes=json_loads(row["quotes"]),
+            confidence=row["confidence"],
+            retrieval_priority=row["retrieval_priority"],
+            is_new_information=bool(row["is_new_information"]),
+            duplicate_of=row["duplicate_of"],
+            speaker=row["speaker"],
+            source_nature=row["source_nature"],
+            evidence_type=row["evidence_type"],
+        )
+
+    def save_embedding(self, knowledge_unit_id: int, model: str, vector: list[float]) -> None:
+        import struct
+
+        blob = struct.pack(f"{len(vector)}f", *vector)
+        conn = self.connect()
+        conn.execute(
+            """
+            INSERT INTO embeddings (knowledge_unit_id, model, embedding, dimensions)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(knowledge_unit_id) DO UPDATE SET
+                model = excluded.model,
+                embedding = excluded.embedding,
+                dimensions = excluded.dimensions,
+                created_at = datetime('now')
+            """,
+            (knowledge_unit_id, model, blob, len(vector)),
+        )
+        conn.commit()
+
+    def load_embeddings(self) -> list[tuple[int, list[float]]]:
+        import struct
+
+        rows = self.connect().execute(
+            """
+            SELECT e.knowledge_unit_id, e.embedding, e.dimensions
+            FROM embeddings e
+            JOIN knowledge_units k ON k.id = e.knowledge_unit_id
+            WHERE k.persona_id = ? AND k.is_new_information = 1 AND k.duplicate_of IS NULL
+            """,
+            (self.persona_id,),
+        ).fetchall()
+        result: list[tuple[int, list[float]]] = []
+        for row in rows:
+            dims = int(row["dimensions"])
+            vector = list(struct.unpack(f"{dims}f", row["embedding"]))
+            result.append((int(row["knowledge_unit_id"]), vector))
+        return result
+
+    def start_sync_run(self) -> int:
+        cursor = self.connect().execute(
+            "INSERT INTO sync_runs (persona_id) VALUES (?)",
+            (self.persona_id,),
+        )
+        self.connect().commit()
+        return int(cursor.lastrowid)
+
+    def finish_sync_run(self, run_id: int, summary: dict[str, int | str]) -> None:
+        cost_row = self.connect().execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM api_usage_logs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        run_cost = float(cost_row["total"]) if cost_row else 0.0
+        self.connect().execute(
+            """
+            UPDATE sync_runs SET
+                finished_at = datetime('now'),
+                sources_discovered = ?,
+                sources_processed = ?,
+                units_created = ?,
+                units_skipped_duplicate = ?,
+                errors = ?,
+                cost_usd = ?,
+                summary = ?
+            WHERE id = ?
+            """,
+            (
+                summary.get("sources_discovered", 0),
+                summary.get("sources_processed", 0),
+                summary.get("units_created", 0),
+                summary.get("units_skipped_duplicate", 0),
+                summary.get("errors", 0),
+                run_cost,
+                str(summary),
+                run_id,
+            ),
+        )
+        self.connect().commit()
+
+    def log_pipeline_event(
+        self,
+        *,
+        persona_id: str,
+        run_id: int | None,
+        stage: str,
+        message: str,
+        source_id: int | None = None,
+        metadata: dict | None = None,
+    ) -> int:
+        cursor = self.connect().execute(
+            """
+            INSERT INTO pipeline_events (persona_id, run_id, source_id, stage, message, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (persona_id, run_id, source_id, stage, message, json_dumps(metadata or {})),
+        )
+        self.connect().commit()
+        return int(cursor.lastrowid)
+
+    def log_api_usage(
+        self,
+        *,
+        persona_id: str,
+        run_id: int | None,
+        source_id: int | None,
+        provider: str,
+        operation: str,
+        model: str = "",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        api_credits: float = 0.0,
+        cost_usd: float = 0.0,
+        is_estimated: bool = True,
+        metadata: dict | None = None,
+    ) -> int:
+        cursor = self.connect().execute(
+            """
+            INSERT INTO api_usage_logs (
+                persona_id, run_id, source_id, provider, operation, model,
+                input_tokens, output_tokens, api_credits, cost_usd, is_estimated, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                persona_id,
+                run_id,
+                source_id,
+                provider,
+                operation,
+                model,
+                input_tokens,
+                output_tokens,
+                api_credits,
+                cost_usd,
+                1 if is_estimated else 0,
+                json_dumps(metadata or {}),
+            ),
+        )
+        self.connect().commit()
+        return int(cursor.lastrowid)
+
+
+def content_fingerprint(unit: KnowledgeUnit) -> str:
+    normalized = re.sub(r"\s+", " ", unit.chunk_text.strip().lower())
+    payload = f"{unit.content_type}|{normalized}|{'|'.join(unit.steps)}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def normalize_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    if not parsed.scheme:
+        parsed = urlparse("https://" + url.strip())
+    netloc = parsed.netloc.lower().removeprefix("www.")
+    path = parsed.path.rstrip("/") or "/"
+    query = parse_qs(parsed.query, keep_blank_values=False)
+    if "youtube.com" in netloc or "youtu.be" in netloc:
+        video_id = None
+        if netloc == "youtu.be":
+            video_id = path.lstrip("/").split("/")[0]
+        elif path.startswith("/watch"):
+            video_id = query.get("v", [None])[0]
+        elif path.startswith("/shorts/"):
+            video_id = path.split("/")[2] if len(path.split("/")) > 2 else None
+        elif path.startswith("/live/"):
+            video_id = path.split("/")[2] if len(path.split("/")) > 2 else None
+        if video_id:
+            return f"https://youtube.com/watch?v={video_id}"
+    clean_query = urlencode({k: v[0] for k, v in sorted(query.items()) if v}, doseq=False)
+    return urlunparse((parsed.scheme.lower(), netloc, path, "", clean_query, ""))
+
+
+def text_hash(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
