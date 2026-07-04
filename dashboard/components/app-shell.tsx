@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Menu, X } from "lucide-react";
+import { Menu, Cancel as X } from "@/lib/icons";
 
 import { SidebarNav } from "@/components/sidebar-nav";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -56,13 +57,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {mobileOpen ? <X className="size-4" /> : <Menu className="size-4" />}
         </Button>
         <SidebarBrand />
+        <div className="ml-auto">
+          <ThemeToggle />
+        </div>
       </header>
 
       {mobileOpen ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
           aria-label="Menü bezárása"
-          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          className="fixed inset-0 z-40 h-auto rounded-none bg-black/50 md:hidden"
           onClick={closeMobile}
         />
       ) : null}
@@ -90,6 +95,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </Button>
         </div>
         <SidebarNav onNavigate={closeMobile} className="flex-1 overflow-y-auto" />
+        <div className="hidden border-t p-3 md:block">
+          <ThemeToggle />
+        </div>
       </aside>
 
       <main className="min-w-0 flex-1 pt-14 md:ml-56 md:pt-0">

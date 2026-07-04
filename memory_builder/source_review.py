@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from memory_builder.config import load_persona_config
 from memory_builder.discovery.source_discovery import _candidate_from_url, classify_platform
 from memory_builder.source_registry import (
     ApprovedSources,
@@ -13,9 +14,9 @@ from memory_builder.source_registry import (
     save_approved,
     save_candidates,
 )
-from memory_builder.config import load_persona_config
 from memory_builder.discovery.source_discovery import discover_persona_source_candidates
 from memory_builder.review.manual_link import parse_manual_review_link, register_manual_content_channel
+from memory_builder.selected_sources import sync_approved_content_channels
 
 
 def run_discovery(persona_id: str, root=None) -> list[SourceCandidate]:
@@ -55,13 +56,23 @@ def apply_review(
     root=None,
 ) -> ApprovedSources:
     config = load_persona_config(persona_id, root)
-    approved: list[SourceCandidate] = []
+    previous = load_approved(persona_id, root)
+    approved_map: dict[str, SourceCandidate] = {}
+    if previous is not None:
+        for source in previous.sources:
+            approved_map[source.url] = source
+
     for index, candidate in enumerate(candidates, start=1):
         if index in rejected_indices:
             candidate.status = "rejected"
+            approved_map.pop(candidate.url, None)
             continue
         candidate.status = "approved"
-        approved.append(candidate)
+        existing = approved_map.get(candidate.url)
+        if existing is not None:
+            candidate.archived = existing.archived
+            candidate.label = candidate.label or existing.label
+        approved_map[candidate.url] = candidate
 
     for url in manual_urls:
         manual = _candidate_from_url(
@@ -76,9 +87,13 @@ def apply_review(
         manual.status = "approved"
         manual.confidence = 1.0
         manual.signals.append("user_submitted")
-        if not any(item.url == manual.url for item in approved):
-            approved.append(manual)
+        existing = approved_map.get(manual.url)
+        if existing is not None:
+            manual.archived = existing.archived
+            manual.label = manual.label or existing.label
+        approved_map[manual.url] = manual
 
+    approved = list(approved_map.values())
     approved.sort(key=lambda item: (-item.confidence, item.url))
     return ApprovedSources(
         persona_id=persona_id,
@@ -194,13 +209,25 @@ def submit_review(
     candidates = load_candidates(persona_id, root)
     if not candidates:
         candidates = run_discovery(persona_id, root)
+
+    profile_manual_urls: list[str] = []
+    for url in manual_urls or []:
+        parsed = parse_manual_review_link(url)
+        if parsed is None:
+            raise ValueError(f"Not a supported profile URL: {url}")
+        if parsed.kind == "content_channel":
+            register_manual_content_channel(persona_id, parsed, root=root)
+            continue
+        profile_manual_urls.append(parsed.url)
+
     approved = apply_review(
         candidates,
         rejected_indices or set(),
-        manual_urls or [],
+        profile_manual_urls,
         persona_id,
         reviewed_by,
         root,
     )
     save_approved(approved, root)
+    sync_approved_content_channels(persona_id, root)
     return approved

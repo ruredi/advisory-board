@@ -1,5 +1,5 @@
-import { ChannelsPageClient } from "@/components/channels/channels-page";
+import { redirect } from "next/navigation";
 
 export default function ChannelsPage() {
-  return <ChannelsPageClient />;
+  redirect("/advisors?tab=channels");
 }

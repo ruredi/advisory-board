@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from memory_builder.processors.diarized_transcript import build_diarized_transcribe_prompt
 from memory_builder.processors.podcast_transcript import (
     is_podcast_audio_url,
     process_podcast,
@@ -42,9 +43,49 @@ class ManualReviewLinkTests(unittest.TestCase):
 
 
 class PodcastTranscriptProcessorTests(unittest.TestCase):
+    def test_diarized_prompt_includes_display_name(self) -> None:
+        prompt = build_diarized_transcribe_prompt("Alex Hormozi", ["Alex Hormozi"])
+        self.assertIn("Alex Hormozi", prompt)
+        self.assertIn("speaker_type", prompt)
+
+    @patch("memory_builder.processors.podcast_transcript.build_diarized_document_text")
+    @patch("memory_builder.processors.podcast_transcript.download_podcast_audio")
+    def test_process_podcast_diarized(self, mock_download, mock_diarized) -> None:
+        from memory_builder.processors.diarized_transcript import TranscriptSegment, TranscriptSegments
+
+        mock_download.return_value = (Path("/tmp/test.mp3"), {"content-type": "audio/mpeg"})
+        segments = TranscriptSegments(
+            display_name="Alex Hormozi",
+            segments=[
+                TranscriptSegment(
+                    segment_id="seg-1",
+                    speaker="Alex Hormozi",
+                    speaker_type="target",
+                    text="Hello from the podcast.",
+                )
+            ],
+        )
+        mock_diarized.return_value = (
+            "[Alex Hormozi]\nHello from the podcast.",
+            segments,
+            {"transcript_segments.json": "/tmp/transcript_segments.json"},
+        )
+
+        doc = process_podcast(
+            "hormozi",
+            "https://episode.flightcast.com/test.mp3",
+            transcription_model="gemini-2.5-flash",
+            title="Test Episode",
+            display_name="Alex Hormozi",
+            speaker_labeled_transcription=True,
+        )
+        self.assertIn("Hello from the podcast", doc.text)
+        self.assertEqual(doc.metadata["transcription_mode"], "diarized")
+        mock_diarized.assert_called_once()
+
     @patch("memory_builder.processors.podcast_transcript.transcribe_audio_with_gemini")
     @patch("memory_builder.processors.podcast_transcript.download_podcast_audio")
-    def test_process_podcast(self, mock_download, mock_transcribe) -> None:
+    def test_process_podcast_plain(self, mock_download, mock_transcribe) -> None:
         mock_download.return_value = (Path("/tmp/test.mp3"), {"content-type": "audio/mpeg"})
         mock_transcribe.return_value = "Hello from the podcast."
 

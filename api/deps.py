@@ -3,9 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from fastapi import HTTPException
-
-from api.personas import list_persona_ids
+from api.personas import ensure_persona_ready
 from memory_builder.env import load_project_env
 from memory_builder.storage.sqlite_store import SQLiteStore
 
@@ -13,8 +11,7 @@ load_project_env()
 
 
 def ensure_persona(persona_id: str) -> None:
-    if persona_id not in list_persona_ids():
-        raise HTTPException(status_code=404, detail=f"Unknown persona: {persona_id}")
+    ensure_persona_ready(persona_id)
 
 
 @contextmanager

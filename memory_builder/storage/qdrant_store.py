@@ -105,6 +105,16 @@ class QdrantStore:
         )
         return bool(records)
 
+    def delete_units(self, unit_ids: list[int]) -> None:
+        if not unit_ids or not self.collection_exists():
+            return
+        from qdrant_client.http import models as qmodels
+
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=qmodels.PointIdsList(points=unit_ids),
+        )
+
     def search(self, vector: list[float], top_k: int = 8) -> list[tuple[int, float]]:
         if not self.collection_exists():
             return []

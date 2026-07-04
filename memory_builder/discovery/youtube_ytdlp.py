@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from memory_builder.discovery.seed_links import classify_source_type, infer_source_nature
+from memory_builder.discovery.source_emit import OnSourceRecord
 from memory_builder.models import SourceRecord, SourceStatus, SourceType
 from memory_builder.storage.sqlite_store import normalize_url
+from memory_builder.telemetry.discovery_events import discovery_log
 
 
 log = logging.getLogger(__name__)
@@ -81,10 +83,14 @@ def discover_youtube_channel_ytdlp(
     *,
     watermark: str | None = None,
     channel_url_meta: str | None = None,
+    on_record: OnSourceRecord | None = None,
 ) -> list[SourceRecord]:
     if not ytdlp_available():
         log.warning("yt-dlp not found — cannot discover YouTube channel %s", channel_url)
+        discovery_log(f"YouTube: yt-dlp nem elérhető — {channel_url}")
         return []
+
+    discovery_log(f"YouTube: csatorna lista lekérése (yt-dlp) — {channel_url}")
 
     cmd = [
         "yt-dlp",
@@ -130,18 +136,23 @@ def discover_youtube_channel_ytdlp(
         if classify_source_type(link) != SourceType.YOUTUBE:
             continue
         if watermark and published and published <= watermark:
-            continue
+            break
         seen.add(link)
-        records.append(
-            SourceRecord(
-                persona_id=persona_id,
-                source_url=link,
-                source_title=title,
-                source_type=SourceType.YOUTUBE,
-                source_date=published,
-                source_nature=infer_source_nature(SourceType.YOUTUBE, link),
-                status=SourceStatus.PENDING,
-                channel_url=meta_url,
-            )
+        record = SourceRecord(
+            persona_id=persona_id,
+            source_url=link,
+            source_title=title,
+            source_type=SourceType.YOUTUBE,
+            source_date=published,
+            source_nature=infer_source_nature(SourceType.YOUTUBE, link),
+            status=SourceStatus.PENDING,
+            channel_url=meta_url,
         )
+        if on_record is not None:
+            if not on_record(record):
+                break
+        records.append(record)
+    watermark_note = f", watermark {watermark[:10]}" if watermark else ""
+    count_label = str(len(records))
+    discovery_log(f"YouTube: {count_label} videó{watermark_note} — {channel_url}")
     return records

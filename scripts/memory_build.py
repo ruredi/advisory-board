@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ load_project_env()
 
 from memory_builder.cli.pipeline_args import add_pipeline_run_arguments
 from memory_builder.pipeline.initial_build import MemoryPipeline
+from memory_builder.pipeline.fatal_errors import PipelineCancelledError, PipelineFatalError
 from memory_builder.source_gate import ensure_sources_approved
 from memory_builder.source_review import print_approved_summary
 from memory_builder.storage.sqlite_store import SQLiteStore
@@ -50,6 +52,8 @@ def _build_pipeline(args: argparse.Namespace) -> MemoryPipeline:
         dry_run=args.dry_run,
         only_platform=args.only,
         skip_discovery=args.skip_discovery,
+        discovery_limit=args.discovery_limit,
+        reprocess_transcripts=args.reprocess_transcripts,
     )
 
 
@@ -85,29 +89,37 @@ def main(argv: list[str] | None = None) -> int:
     run_id: int | None = None
     if not args.dry_run:
         run_id = store.start_sync_run()
-    ctx = PipelineRunContext(args.persona, run_id or 0, store) if run_id else None
-    if ctx:
-        with run_context(ctx):
-            summary = _build_pipeline(args).run_initial_build(retry_failed=args.retry_failed)
-    else:
-        summary = _build_pipeline(args).run_initial_build(retry_failed=args.retry_failed)
+        store.set_run_pid(run_id, os.getpid())
+    run_options = {
+        "skip_discovery": args.skip_discovery or args.reprocess_transcripts,
+        "discover_only": args.discover_only,
+        "retry_failed": args.retry_failed,
+        "reprocess_transcripts": args.reprocess_transcripts,
+        "only_platform": args.only or "",
+        "dry_run": args.dry_run,
+    }
+    ctx = PipelineRunContext(args.persona, run_id or 0, store, run_options=run_options) if run_id else None
+    pipeline = _build_pipeline(args)
+    try:
+        if ctx:
+            with run_context(ctx):
+                pipeline.run_initial_build(
+                    retry_failed=args.retry_failed,
+                    discover_only=args.discover_only,
+                )
+        else:
+            pipeline.run_initial_build(
+                retry_failed=args.retry_failed,
+                discover_only=args.discover_only,
+            )
+    except (PipelineFatalError, PipelineCancelledError):
+        pass
+    summary = pipeline.summary
     cost_usd: float | None = None
-    if run_id:
-        store.finish_sync_run(
-            run_id,
-            {
-                "sources_discovered": summary.sources_discovered,
-                "sources_processed": summary.sources_processed,
-                "sources_skipped_unchanged": summary.sources_skipped_unchanged,
-                "sources_updated": summary.sources_updated,
-                "units_created": summary.units_created,
-                "units_skipped_duplicate": summary.units_skipped_duplicate,
-                "units_repeated_idea": summary.units_repeated_idea,
-                "units_clarification": summary.units_clarification,
-                "errors": summary.errors,
-                "only_platform": args.only or "",
-            },
-        )
+    if run_id and store.is_run_open(run_id):
+        store.finish_sync_run(run_id, pipeline.summary_dict())
+        cost_usd = get_cost_totals(store, args.persona, run_id=run_id).cost_usd
+    elif run_id:
         cost_usd = get_cost_totals(store, args.persona, run_id=run_id).cost_usd
     store.close()
     _print_summary(args, summary, run_id, cost_usd)

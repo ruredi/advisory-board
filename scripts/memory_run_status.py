@@ -23,6 +23,15 @@ from memory_builder.telemetry.source_labels import extract_stage_label, short_ur
 from memory_builder.storage.sqlite_store import SQLiteStore
 
 
+def _format_duration_seconds(total_seconds: int) -> str:
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pipeline run progress and cost snapshot.")
     parser.add_argument("--persona", default="hormozi", help="Persona id")
@@ -95,8 +104,14 @@ def _print_watch_view(
     events: list[dict],
     display_map: dict[int, dict[str, str]],
 ) -> None:
-    status = "FINISHED" if progress and progress.finished_at else "RUNNING"
-    print(f"run={run_id}  {status}  |  cost ${cost_run.cost_usd:.4f}  (today ${cost_today.cost_usd:.4f}, total ${cost_persona.cost_usd:.4f})")
+    status = progress.status.upper() if progress else "UNKNOWN"
+    active_seconds = progress.active_duration_seconds if progress else 0
+    print(
+        f"run={run_id}  {status}  |  net {_format_duration_seconds(active_seconds)}  "
+        f"|  cost ${cost_run.cost_usd:.4f}  (today ${cost_today.cost_usd:.4f}, total ${cost_persona.cost_usd:.4f})"
+    )
+    if progress and progress.stopped_at:
+        print(f"stopped_at={progress.stopped_at}")
     print("-" * 72)
 
     if activity.current_platform or activity.current_title:
@@ -108,6 +123,10 @@ def _print_watch_view(
         print("NOW  discovery")
     elif status == "FINISHED":
         print("NOW  idle")
+    elif status == "ABORTED":
+        print("NOW  aborted (fatal error)")
+    elif status == "INTERRUPTED":
+        print("NOW  interrupted")
     else:
         print("NOW  waiting")
 
@@ -160,6 +179,11 @@ def main(argv: list[str] | None = None) -> int:
         "progress": None if progress is None else {
             "started_at": progress.started_at,
             "finished_at": progress.finished_at,
+            "stopped_at": progress.stopped_at,
+            "stop_reason": progress.stop_reason,
+            "last_activity_at": progress.last_activity_at,
+            "status": progress.status,
+            "active_duration_seconds": progress.active_duration_seconds,
             "latest_stage": progress.latest_stage,
             "latest_message": progress.latest_message,
             "events_count": progress.events_count,

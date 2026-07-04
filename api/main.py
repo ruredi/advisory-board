@@ -19,11 +19,12 @@ from api.overview import build_persona_overview
 from api.persona_config import router as persona_config_router
 from api.personas import list_persona_ids, list_personas
 from api.review import router as review_router
+from api.run_watchdog import run_watchdog_lifespan
 from api.runs import router as runs_router
 from api.schemas import PersonaOverview, PersonaSummary
 from api.sources import router as sources_router
 
-app = FastAPI(title="Advisory Board Dashboard API")
+app = FastAPI(title="Advisory Board Dashboard API", lifespan=run_watchdog_lifespan)
 
 app.add_middleware(
     CORSMiddleware,

@@ -8,9 +8,15 @@ import type {
   ChannelItem,
   CostBreakdownItem,
   CostSummary,
+  ScrapflyCostSummary,
+  ScrapflySubscription,
   JobCreateRequest,
   JobItem,
+  KnowledgeUnitDetail,
   KnowledgeUnitItem,
+  QuoteItem,
+  TranscriptSegmentsResponse,
+  TranscriptTextResponse,
   UnitStats,
   PersonaConfigResponse,
   PersonaOverview,
@@ -19,10 +25,14 @@ import type {
   RunProgress,
   SearchResponse,
   SoulResponse,
+  ReviewSubmitResponse,
   SourceCandidateItem,
   SourceDetail,
   SourceItem,
+  SourceLinkAnalyzeResponse,
+  SourceLinkSubmitResponse,
   SourceStats,
+  SourceWithMemoryItem,
   SyncRunDetail,
 } from "@/lib/api/types";
 
@@ -85,16 +95,30 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
+export const ALL_PERSONAS = "__all__";
+
 export const fetchPersonas = () => apiGet<PersonaSummary[]>("/personas");
 export const fetchPersonaOverview = (personaId: string) =>
   apiGet<PersonaOverview>(`/personas/${encodeURIComponent(personaId)}/overview`);
 export const fetchRuns = (personaId: string) =>
   apiGet<SyncRunDetail[]>(`/personas/${encodeURIComponent(personaId)}/runs`);
+export const fetchAllRuns = async () => {
+  const personas = await fetchPersonas();
+  const runsByPersona = await Promise.all(personas.map((persona) => fetchRuns(persona.persona_id)));
+  return runsByPersona
+    .flat()
+    .sort((left, right) => Date.parse(right.started_at) - Date.parse(left.started_at));
+};
 export const fetchRun = (personaId: string, runId: number) =>
   apiGet<RunProgress>(`/personas/${encodeURIComponent(personaId)}/runs/${runId}`);
-export const fetchRunEvents = (personaId: string, runId: number, afterId = 0) =>
+export const fetchRunEvents = (personaId: string, runId: number, afterId = 0, limit = 200) =>
   apiGet<PipelineEvent[]>(
-    `/personas/${encodeURIComponent(personaId)}/runs/${runId}/events?after_id=${afterId}&limit=200`
+    `/personas/${encodeURIComponent(personaId)}/runs/${runId}/events?after_id=${afterId}&limit=${limit}`
+  );
+export const stopRun = (personaId: string, runId: number) =>
+  apiSend<RunProgress>(
+    `/personas/${encodeURIComponent(personaId)}/runs/${runId}/stop`,
+    "POST"
   );
 export const fetchSources = (personaId: string, params: Record<string, string> = {}) => {
   const query = new URLSearchParams(params).toString();
@@ -102,8 +126,70 @@ export const fetchSources = (personaId: string, params: Record<string, string> =
     `/personas/${encodeURIComponent(personaId)}/sources${query ? `?${query}` : ""}`
   );
 };
+export const fetchAllSources = async (params: Record<string, string> = {}) => {
+  const personas = await fetchPersonas();
+  const sourcesByPersona = await Promise.all(
+    personas.map((persona) => fetchSources(persona.persona_id, params))
+  );
+  return sourcesByPersona
+    .flat()
+    .sort((left, right) => right.id - left.id)
+    .slice(0, Number(params.limit) || 500);
+};
 export const fetchSourceStats = (personaId: string) =>
   apiGet<SourceStats>(`/personas/${encodeURIComponent(personaId)}/sources/stats`);
+export const fetchAllSourceStats = async (): Promise<SourceStats> => {
+  const personas = await fetchPersonas();
+  const statsByPersona = await Promise.all(
+    personas.map((persona) => fetchSourceStats(persona.persona_id))
+  );
+  const statusCounts: Record<string, number> = {};
+  const platformMap = new Map<string, Record<string, number>>();
+  let total = 0;
+
+  for (const stats of statsByPersona) {
+    total += stats.total;
+    for (const [status, count] of Object.entries(stats.status_counts)) {
+      statusCounts[status] = (statusCounts[status] ?? 0) + count;
+    }
+    for (const platform of stats.platforms) {
+      const existing = platformMap.get(platform.platform) ?? {};
+      for (const [status, count] of Object.entries(platform.status_counts)) {
+        existing[status] = (existing[status] ?? 0) + count;
+      }
+      platformMap.set(platform.platform, existing);
+    }
+  }
+
+  const platforms = [...platformMap.entries()]
+    .map(([platform, counts]) => ({
+      platform,
+      total: Object.values(counts).reduce((sum, count) => sum + count, 0),
+      status_counts: counts,
+    }))
+    .sort((left, right) => right.total - left.total);
+
+  return { total, status_counts: statusCounts, platforms };
+};
+export const fetchSourcesWithMemory = (
+  personaId: string,
+  params: Record<string, string> = {}
+) => {
+  const query = new URLSearchParams(params).toString();
+  return apiGet<SourceWithMemoryItem[]>(
+    `/personas/${encodeURIComponent(personaId)}/sources/with-memory${query ? `?${query}` : ""}`
+  );
+};
+export const fetchAllSourcesWithMemory = async (params: Record<string, string> = {}) => {
+  const personas = await fetchPersonas();
+  const sourcesByPersona = await Promise.all(
+    personas.map((persona) => fetchSourcesWithMemory(persona.persona_id, params))
+  );
+  return sourcesByPersona
+    .flat()
+    .sort((left, right) => right.id - left.id)
+    .slice(0, Number(params.limit) || 300);
+};
 export const fetchSource = (personaId: string, sourceId: number) =>
   apiGet<SourceDetail>(`/personas/${encodeURIComponent(personaId)}/sources/${sourceId}`);
 export const patchSource = (personaId: string, sourceId: number, status: string) =>
@@ -112,14 +198,89 @@ export const patchSource = (personaId: string, sourceId: number, status: string)
     "PATCH",
     { status }
   );
+export const processSource = (personaId: string, sourceId: number) =>
+  apiSend<JobItem>(
+    `/personas/${encodeURIComponent(personaId)}/sources/${sourceId}/process`,
+    "POST"
+  );
+export const deleteSource = (personaId: string, sourceId: number) =>
+  apiSend<void>(
+    `/personas/${encodeURIComponent(personaId)}/sources/${sourceId}`,
+    "DELETE"
+  );
+export const analyzeSourceLink = (body: { url: string; persona_id?: string }) =>
+  apiSend<SourceLinkAnalyzeResponse>("/sources/analyze", "POST", body);
+export const submitSourceLink = (body: {
+  url: string;
+  persona_ids: string[];
+  process?: boolean;
+  persona_id?: string;
+}) => apiSend<SourceLinkSubmitResponse>("/sources/submit", "POST", body);
 export const fetchUnits = (personaId: string, params: Record<string, string> = {}) => {
   const query = new URLSearchParams(params).toString();
   return apiGet<KnowledgeUnitItem[]>(
     `/personas/${encodeURIComponent(personaId)}/units${query ? `?${query}` : ""}`
   );
 };
+export const fetchAllUnits = async (params: Record<string, string> = {}) => {
+  const personas = await fetchPersonas();
+  const unitsByPersona = await Promise.all(
+    personas.map((persona) => fetchUnits(persona.persona_id, params))
+  );
+  return unitsByPersona
+    .flat()
+    .sort((left, right) => right.id - left.id)
+    .slice(0, Number(params.limit) || 500);
+};
 export const fetchUnitStats = (personaId: string) =>
   apiGet<UnitStats>(`/personas/${encodeURIComponent(personaId)}/units/stats`);
+export const fetchAllUnitStats = async (): Promise<UnitStats> => {
+  const personas = await fetchPersonas();
+  const statsByPersona = await Promise.all(
+    personas.map((persona) => fetchUnitStats(persona.persona_id))
+  );
+  const merged: UnitStats = {
+    total: 0,
+    indexed_sources: 0,
+    sources_with_units: 0,
+    duplicates: 0,
+    by_content_type: {},
+    by_confidence: {},
+    by_platform: {},
+  };
+  for (const stats of statsByPersona) {
+    merged.total += stats.total;
+    merged.indexed_sources += stats.indexed_sources;
+    merged.sources_with_units += stats.sources_with_units;
+    merged.duplicates += stats.duplicates;
+    for (const [key, count] of Object.entries(stats.by_content_type)) {
+      merged.by_content_type[key] = (merged.by_content_type[key] ?? 0) + count;
+    }
+    for (const [key, count] of Object.entries(stats.by_confidence)) {
+      merged.by_confidence[key] = (merged.by_confidence[key] ?? 0) + count;
+    }
+    for (const [key, count] of Object.entries(stats.by_platform ?? {})) {
+      merged.by_platform[key] = (merged.by_platform[key] ?? 0) + count;
+    }
+  }
+  return merged;
+};
+export const fetchUnit = (personaId: string, unitId: number) =>
+  apiGet<KnowledgeUnitDetail>(`/personas/${encodeURIComponent(personaId)}/units/${unitId}`);
+export const fetchQuotes = (personaId: string, params: Record<string, string> = {}) => {
+  const query = new URLSearchParams(params).toString();
+  return apiGet<QuoteItem[]>(
+    `/personas/${encodeURIComponent(personaId)}/quotes${query ? `?${query}` : ""}`
+  );
+};
+export const fetchSourceTranscript = (personaId: string, sourceId: number, variant: string) =>
+  apiGet<TranscriptTextResponse>(
+    `/personas/${encodeURIComponent(personaId)}/sources/${sourceId}/transcripts/${encodeURIComponent(variant)}`
+  );
+export const fetchSourceSegments = (personaId: string, sourceId: number) =>
+  apiGet<TranscriptSegmentsResponse>(
+    `/personas/${encodeURIComponent(personaId)}/sources/${sourceId}/segments`
+  );
 export const searchMemory = (personaId: string, query: string, contextPack: boolean) =>
   apiSend<SearchResponse>(`/personas/${encodeURIComponent(personaId)}/search`, "POST", {
     query,
@@ -152,17 +313,165 @@ export const discoverCandidates = (personaId: string) =>
 export const submitReview = (
   personaId: string,
   body: { rejected_indices: number[]; manual_urls: string[] }
-) => apiSend(`/personas/${encodeURIComponent(personaId)}/review`, "POST", body);
+) => apiSend<ReviewSubmitResponse>(`/personas/${encodeURIComponent(personaId)}/review`, "POST", body);
 export const fetchCostSummary = (personaId: string) =>
   apiGet<CostSummary>(`/personas/${encodeURIComponent(personaId)}/costs/summary`);
+export const fetchAllCostSummary = async (): Promise<CostSummary> => {
+  const personas = await fetchPersonas();
+  const summaries = await Promise.all(
+    personas.map((persona) => fetchCostSummary(persona.persona_id))
+  );
+  return summaries.reduce(
+    (merged, summary) => ({
+      today_usd: merged.today_usd + summary.today_usd,
+      today_calls: merged.today_calls + summary.today_calls,
+      total_usd: merged.total_usd + summary.total_usd,
+      total_calls: merged.total_calls + summary.total_calls,
+      today_api_usd: merged.today_api_usd + summary.today_api_usd,
+      today_api_calls: merged.today_api_calls + summary.today_api_calls,
+      today_scrapfly_usd: merged.today_scrapfly_usd + summary.today_scrapfly_usd,
+      today_scrapfly_calls: merged.today_scrapfly_calls + summary.today_scrapfly_calls,
+      today_scrapfly_credits: merged.today_scrapfly_credits + summary.today_scrapfly_credits,
+    }),
+    {
+      today_usd: 0,
+      today_calls: 0,
+      total_usd: 0,
+      total_calls: 0,
+      today_api_usd: 0,
+      today_api_calls: 0,
+      today_scrapfly_usd: 0,
+      today_scrapfly_calls: 0,
+      today_scrapfly_credits: 0,
+    }
+  );
+};
+export const fetchScrapflySubscription = () =>
+  apiGet<ScrapflySubscription>("/costs/scrapfly/subscription");
+export const fetchScrapflyCostSummary = (personaId: string, days = 30) =>
+  apiGet<ScrapflyCostSummary>(
+    `/personas/${encodeURIComponent(personaId)}/costs/scrapfly?days=${days}`
+  );
+export const fetchAllScrapflyCostSummary = async (days = 30): Promise<ScrapflyCostSummary> => {
+  const personas = await fetchPersonas();
+  const summaries = await Promise.all(
+    personas.map((persona) => fetchScrapflyCostSummary(persona.persona_id, days))
+  );
+  const dailyMap = new Map<string, { day: string; cost_usd: number; api_credits: number; call_count: number }>();
+  const operationMap = new Map<string, CostBreakdownItem>();
+  let today_usd = 0;
+  let today_credits = 0;
+  let today_calls = 0;
+  let total_usd = 0;
+  let total_credits = 0;
+  let total_calls = 0;
+
+  for (const summary of summaries) {
+    today_usd += summary.today_usd;
+    today_credits += summary.today_credits;
+    today_calls += summary.today_calls;
+    total_usd += summary.total_usd;
+    total_credits += summary.total_credits;
+    total_calls += summary.total_calls;
+
+    for (const day of summary.daily) {
+      const existing = dailyMap.get(day.day) ?? {
+        day: day.day,
+        cost_usd: 0,
+        api_credits: 0,
+        call_count: 0,
+      };
+      dailyMap.set(day.day, {
+        day: day.day,
+        cost_usd: existing.cost_usd + day.cost_usd,
+        api_credits: existing.api_credits + day.api_credits,
+        call_count: existing.call_count + day.call_count,
+      });
+    }
+
+    for (const row of summary.by_operation) {
+      const existing = operationMap.get(row.label) ?? {
+        label: row.label,
+        cost_usd: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        api_credits: 0,
+        call_count: 0,
+      };
+      operationMap.set(row.label, {
+        label: row.label,
+        cost_usd: existing.cost_usd + row.cost_usd,
+        input_tokens: existing.input_tokens + row.input_tokens,
+        output_tokens: existing.output_tokens + row.output_tokens,
+        api_credits: existing.api_credits + row.api_credits,
+        call_count: existing.call_count + row.call_count,
+      });
+    }
+  }
+
+  return {
+    today_usd,
+    today_credits,
+    today_calls,
+    today_cost_per_scrape: today_calls > 0 ? today_usd / today_calls : null,
+    total_usd,
+    total_credits,
+    total_calls,
+    total_cost_per_scrape: total_calls > 0 ? total_usd / total_calls : null,
+    daily: [...dailyMap.values()].sort((left, right) => left.day.localeCompare(right.day)),
+    by_operation: [...operationMap.values()].sort((left, right) => right.cost_usd - left.cost_usd),
+  };
+};
 export const fetchCostBreakdown = (
   personaId: string,
   groupBy: string,
-  days = 30
-) =>
-  apiGet<CostBreakdownItem[]>(
-    `/personas/${encodeURIComponent(personaId)}/costs/breakdown?group_by=${groupBy}&days=${days}`
+  days = 30,
+  excludeProvider?: string
+) => {
+  const params = new URLSearchParams({
+    group_by: groupBy,
+    days: String(days),
+  });
+  if (excludeProvider) {
+    params.set("exclude_provider", excludeProvider);
+  }
+  return apiGet<CostBreakdownItem[]>(
+    `/personas/${encodeURIComponent(personaId)}/costs/breakdown?${params.toString()}`
   );
+};
+function mergeCostBreakdownRows(rows: CostBreakdownItem[]): CostBreakdownItem[] {
+  const merged = new Map<string, CostBreakdownItem>();
+  for (const row of rows) {
+    const existing = merged.get(row.label) ?? {
+      label: row.label,
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      api_credits: 0,
+      call_count: 0,
+    };
+    merged.set(row.label, {
+      label: row.label,
+      cost_usd: existing.cost_usd + row.cost_usd,
+      input_tokens: existing.input_tokens + row.input_tokens,
+      output_tokens: existing.output_tokens + row.output_tokens,
+      api_credits: existing.api_credits + row.api_credits,
+      call_count: existing.call_count + row.call_count,
+    });
+  }
+  return [...merged.values()].sort((left, right) => right.cost_usd - left.cost_usd);
+}
+export const fetchAllCostBreakdown = async (
+  groupBy: string,
+  days = 30,
+  excludeProvider?: string
+) => {
+  const personas = await fetchPersonas();
+  const breakdowns = await Promise.all(
+    personas.map((persona) => fetchCostBreakdown(persona.persona_id, groupBy, days, excludeProvider))
+  );
+  return mergeCostBreakdownRows(breakdowns.flat());
+};
 export const fetchLogs = (personaId: string, params: Record<string, string> = {}) => {
   const query = new URLSearchParams(params).toString();
   return apiGet<PipelineEvent[]>(

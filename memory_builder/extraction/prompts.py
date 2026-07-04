@@ -22,7 +22,10 @@ Return ONLY valid JSON array. Each item must follow this schema:
 Rules:
 - Do not invent quotes. quote content_type requires exact text from source.
 - Extract frameworks with components and step-by-step processes separately in steps[].
+- steps[] must contain only high-level procedural steps (max 12). Never put caption timestamps, SRT/VTT fragments, or transcript tokens in steps[].
 - Prefer teachings, frameworks, decision logic, warnings, and examples from the target speaker only.
+- Extract quotes ONLY from {display_name}. Never quote Speaker 1/2, hosts, interviewers, or CONTEXT_ONLY blocks.
+- Set quotes[].speaker to {display_name} for all persona quotes.
 - If insufficient evidence, use confidence insufficient_evidence and skip low-value chunks.
 """
 

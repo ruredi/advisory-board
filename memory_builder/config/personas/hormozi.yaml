@@ -8,6 +8,9 @@ speaker_names:
   - Alex Hormozi
   - Hormozi
 
+speaker_labeled_transcription: true
+allow_unlabeled_fallback: false
+
 allowed_domains:
   - acquisition.com
   - hormozi.blog
@@ -29,13 +32,14 @@ watch_feeds:
     label: Acquisition.com homepage
 
 # Social media — Scrapfly (SCRAPFLY_KEY required)
+# discovery_max_pages: biztonsági lapozási limit (watermark feletti új posztokig)
 social_profiles:
   - platform: x
     username: alexhormozi
-    max_posts: 50
+    discovery_max_pages: 50
   - platform: instagram
     username: hormozi
-    max_posts: 50
+    discovery_max_pages: 50
 
 min_confidence: weak
 embedding_model: text-embedding-3-small

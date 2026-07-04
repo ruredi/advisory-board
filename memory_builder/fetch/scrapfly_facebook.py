@@ -20,6 +20,9 @@ from memory_builder.fetch.scrapfly_client import get_scrapfly_client
 from memory_builder.telemetry.usage_helpers import maybe_record_scrapfly
 
 
+from memory_builder.telemetry.discovery_events import discovery_log
+
+
 log = logging.getLogger(__name__)
 
 BASE_CONFIG = {
@@ -350,54 +353,82 @@ async def scrape_facebook_post(url: str) -> dict[str, Any]:
     return post
 
 
-async def scrape_facebook_timeline(profile_url: str, *, max_posts: int = 50) -> list[dict[str, Any]]:
+async def scrape_facebook_timeline_since(
+    profile_url: str,
+    *,
+    known_urls: set[str] | None = None,
+    max_posts: int = 200,
+) -> list[dict[str, Any]]:
     target = parse_facebook_target(profile_url)
     if target is None or target.kind == "post":
         raise ValueError(f"Not a Facebook profile/page/group URL: {profile_url}")
 
     canonical_url = _canonical_profile_url(profile_url)
+    discovery_log(f"Facebook {canonical_url}: timeline scrape (Scrapfly)…")
     page_html = await _scrape_facebook_page(canonical_url, scroll_count=6)
     stories = extract_stories_from_html(page_html)
     links = extract_post_links_from_html(page_html, canonical_url)
 
     collected: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
-
-    def add_story(story: dict[str, Any]) -> None:
-        if target.kind == "group" and not is_group_official_post(story, target.slug):
-            return
-        if target.kind in {"page", "profile"} and not _matches_page_actor(story, target.slug):
-            return
-        post_url = facebook_post_public_url(story, canonical_url)
-        if post_url in seen_urls:
-            return
-        seen_urls.add(post_url)
-        story = dict(story)
-        story["wwwURL"] = post_url
-        collected.append(story)
+    stopped_at_known = False
 
     for story in stories:
-        add_story(story)
+        if target.kind == "group" and not is_group_official_post(story, target.slug):
+            continue
+        if target.kind in {"page", "profile"} and not _matches_page_actor(story, target.slug):
+            continue
+        post_url = facebook_post_public_url(story, canonical_url)
+        if known_urls and post_url in known_urls:
+            stopped_at_known = True
+            break
+        if post_url in seen_urls:
+            continue
+        seen_urls.add(post_url)
+        story_copy = dict(story)
+        story_copy["wwwURL"] = post_url
+        collected.append(story_copy)
         if len(collected) >= max_posts:
             break
 
-    for link in links:
-        if len(collected) >= max_posts:
-            break
-        if link in seen_urls:
-            continue
-        if target.kind == "group":
-            continue
-        seen_urls.add(link)
-        collected.append({"post_id": "", "text": "", "wwwURL": link, "actors": []})
+    if not stopped_at_known:
+        for link in links:
+            if len(collected) >= max_posts:
+                break
+            if link in seen_urls:
+                continue
+            if target.kind == "group":
+                continue
+            if known_urls and link in known_urls:
+                stopped_at_known = True
+                break
+            seen_urls.add(link)
+            collected.append({"post_id": "", "text": "", "wwwURL": link, "actors": []})
+
+    if stopped_at_known:
+        discovery_log(f"Facebook {canonical_url}: ismert poszt elérve, leállás")
 
     if not collected:
         log.warning("Facebook timeline returned no posts for %s", canonical_url)
+    discovery_log(f"Facebook {canonical_url}: {len(collected)} új poszt")
     return collected[:max_posts]
 
 
-async def collect_facebook_posts(profile_url: str, max_posts: int = 50) -> list[dict[str, Any]]:
-    return await scrape_facebook_timeline(profile_url, max_posts=max_posts)
+async def scrape_facebook_timeline(profile_url: str, *, max_posts: int = 50) -> list[dict[str, Any]]:
+    return await scrape_facebook_timeline_since(profile_url, max_posts=max_posts)
+
+
+async def collect_facebook_posts(
+    profile_url: str,
+    max_posts: int = 50,
+    *,
+    known_urls: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    return await scrape_facebook_timeline_since(
+        profile_url,
+        known_urls=known_urls,
+        max_posts=max_posts,
+    )
 
 
 def format_facebook_post_text(post: dict[str, Any]) -> str:

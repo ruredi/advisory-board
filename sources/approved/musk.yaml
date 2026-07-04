@@ -1,0 +1,16 @@
+persona_id: musk
+reviewed_at: '2026-07-03T18:03:44.760067+00:00'
+reviewed_by: dashboard
+sources:
+- url: https://x.com/elonmusk
+  platform: x
+  confidence: 0.92
+  discovery_source: seed_file
+  username: elonmusk
+  signals:
+  - seed_file
+  - platform:x
+  - allowed_domain
+  status: approved
+  label: ''
+  archived: false

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from memory_builder.models import build_embedding_text_from_row
 from memory_builder.storage.embeddings import EmbeddingClient
 from memory_builder.storage.qdrant_store import QdrantStore
 from memory_builder.storage.sqlite_store import SQLiteStore
@@ -46,12 +47,7 @@ class VectorIndex:
             unit_id = int(row["id"])
             if self.qdrant.has_unit(unit_id):
                 continue
-            parts = [row["chunk_text"], row["visual_description"]]
-            for field in ("frameworks", "processes", "steps"):
-                value = row[field]
-                if value and value != "[]":
-                    parts.append(value)
-            text = "\n".join(part for part in parts if part)
+            text = build_embedding_text_from_row(row)
             self.index_unit(unit_id, text)
             count += 1
         return count

@@ -1,0 +1,27 @@
+persona_id: bezos
+display_name: Jeff Bezos
+
+seed_link_files:
+  - docs/notebooklm-forrasok/jeff-bezos/jeff-bezos-linkek.txt
+
+speaker_names:
+  - Jeff Bezos
+
+allowed_domains:
+  - amazon.com
+  - x.com
+  - twitter.com
+
+watch_feeds: []
+
+social_profiles:
+  - platform: x
+    username: JeffBezos
+
+min_confidence: weak
+embedding_model: text-embedding-3-small
+extraction_model: gemini-2.5-flash
+transcription_model: gemini-2.5-flash
+vision_model: gemini-2.5-flash
+vector_store: qdrant
+qdrant_url: ""

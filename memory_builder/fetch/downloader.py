@@ -30,6 +30,7 @@ def save_raw_bytes(persona_id: str, source_url: str, suffix: str, content: bytes
     base = sources_raw_dir(persona_id, root or project_root()) / source_slug(source_url)
     base.mkdir(parents=True, exist_ok=True)
     path = base / suffix
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
     return path
 

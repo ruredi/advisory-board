@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, ArchiveRestore, ExternalLink, Plus, Radio } from "lucide-react";
+import { Archive, ArchiveRestore, ExternalLink, Plus, Radar, Radio } from "@/lib/icons";
 
 import {
   CHANNEL_TYPE_GROUPS,
@@ -10,14 +10,20 @@ import {
   ChannelTypeIcon,
   getChannelTypeMeta,
 } from "@/components/channels/channel-type-icon";
-import { PageHeader } from "@/components/shared/page-header";
+import { SourceReviewModal } from "@/components/channels/source-review-modal";
 import { QueryError } from "@/components/shared/api-guard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { createChannel, fetchChannels, patchChannel } from "@/lib/api/client";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  createChannel,
+  fetchCandidates,
+  fetchChannels,
+  patchChannel,
+} from "@/lib/api/client";
 import { formatDateTime } from "@/lib/format";
-import { usePersonaPageState } from "@/lib/hooks/use-persona-page";
 import { cn } from "@/lib/utils";
 
 function formatDisplayUrl(url: string) {
@@ -30,16 +36,22 @@ function formatDisplayUrl(url: string) {
   }
 }
 
-export function ChannelsPageClient() {
-  const { personaId, setPersonaId } = usePersonaPageState();
+export function AdvisorChannelsPanel({ personaId }: { personaId: string }) {
   const [channelType, setChannelType] = useState("youtube_channel");
   const [url, setUrl] = useState("");
   const [label, setLabel] = useState("");
+  const [reviewOpen, setReviewOpen] = useState(false);
   const queryClient = useQueryClient();
 
   const channelsQuery = useQuery({
     queryKey: ["channels", personaId],
     queryFn: () => fetchChannels(personaId),
+    enabled: Boolean(personaId),
+  });
+
+  const candidatesQuery = useQuery({
+    queryKey: ["candidates", personaId],
+    queryFn: () => fetchCandidates(personaId),
     enabled: Boolean(personaId),
   });
 
@@ -59,18 +71,19 @@ export function ChannelsPageClient() {
   });
 
   const channels = channelsQuery.data ?? [];
+  const activeChannels = channels.filter((channel) => !channel.archived);
   const activeTypeMeta = getChannelTypeMeta(channelType);
+  const candidates = candidatesQuery.data ?? [];
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Csatornák"
-        description="YouTube, podcast, social és web források regisztrálása."
-        personaId={personaId}
-        onPersonaChange={setPersonaId}
-      />
+      <QueryError error={channelsQuery.error ?? candidatesQuery.error} />
 
-      <QueryError error={channelsQuery.error} />
+      <SourceReviewModal
+        personaId={personaId}
+        open={reviewOpen}
+        onOpenChange={setReviewOpen}
+      />
 
       <Card>
         <CardHeader>
@@ -90,15 +103,16 @@ export function ChannelsPageClient() {
               </p>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {group.options.map((option) => (
-                  <button
+                  <Button
                     key={option.value}
                     type="button"
+                    variant="outline"
                     onClick={() => setChannelType(option.value)}
                     className={cn(
-                      "flex items-start gap-3 rounded-lg border p-3 text-left transition-colors",
+                      "h-auto items-start justify-start gap-3 rounded-lg p-3 text-left whitespace-normal",
                       channelType === option.value
                         ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                        : "border-border hover:bg-muted/50",
+                        : "hover:bg-muted/50",
                       !option.supported && "opacity-90"
                     )}
                   >
@@ -116,32 +130,31 @@ export function ChannelsPageClient() {
                         {option.description}
                       </span>
                     </span>
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
           ))}
 
           <div className="flex flex-wrap items-end gap-3 border-t pt-4">
-            <label className="flex min-w-72 flex-1 flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">URL</span>
-              <input
+            <div className="flex min-w-72 flex-1 flex-col gap-1.5">
+              <Label className="text-xs font-medium text-muted-foreground">URL</Label>
+              <Input
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder={activeTypeMeta.urlHint || "https://…"}
-                className="rounded-md border bg-background px-3 py-2 text-sm"
               />
-            </label>
-            <label className="flex min-w-48 flex-1 flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Név (opcionális)</span>
-              <input
+            </div>
+            <div className="flex min-w-48 flex-1 flex-col gap-1.5">
+              <Label className="text-xs font-medium text-muted-foreground">Név (opcionális)</Label>
+              <Input
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
                 placeholder="pl. Alex Hormozi YouTube"
-                className="rounded-md border bg-background px-3 py-2 text-sm"
               />
-            </label>
+            </div>
             <Button
+              type="button"
               onClick={() => addMutation.mutate()}
               disabled={!url || addMutation.isPending || !activeTypeMeta.supported}
             >
@@ -162,19 +175,70 @@ export function ChannelsPageClient() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Radio className="size-4" />
-            Csatornák
+            <Radar className="size-4" />
+            Automatikus felderítés
           </CardTitle>
           <CardDescription>
-            {channels.length > 0
-              ? `${channels.length} regisztrált forrás — discovery ezekből gyűjti az új epizódokat.`
-              : "Még nincs csatorna ehhez a personához."}
+            Social profil jelöltek keresése és ellenőrzése — ugyanaz a lépésenkénti folyamat, mint a
+            terminálban (<code className="text-xs">review_sources.py</code>).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Button type="button" variant="outline" onClick={() => setReviewOpen(true)}>
+            Discovery indítása
+          </Button>
+
+          {candidates.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Utolsó discovery: {candidates.length} jelölt (review után a jóváhagyottak alul
+                jelennek meg).
+              </p>
+              <div className="space-y-2">
+                {candidates.slice(0, 5).map((candidate) => (
+                  <div
+                    key={candidate.index}
+                    className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+                  >
+                    <ChannelTypeIcon type={candidate.platform} size="sm" />
+                    <span className="min-w-0 truncate">{formatDisplayUrl(candidate.url)}</span>
+                    <Badge variant="outline" className="ml-auto shrink-0 text-[0.65rem]">
+                      {candidate.status}
+                    </Badge>
+                  </div>
+                ))}
+                {candidates.length > 5 ? (
+                  <p className="text-xs text-muted-foreground">
+                    +{candidates.length - 5} további jelölt — indítsd újra a review-t a teljes
+                    listáért.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Még nincs jelölt — indíts discovery-t, vagy adj hozzá csatornát kézzel fent.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Radio className="size-4" />
+            Kiválasztott csatornák
+          </CardTitle>
+          <CardDescription>
+            {activeChannels.length > 0
+              ? `${activeChannels.length} aktív forrás — discovery és social scraping ezekből indul.`
+              : "Még nincs kiválasztott csatorna ehhez a personához."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {channels.length === 0 ? (
             <div className="rounded-lg border border-dashed px-6 py-10 text-center text-sm text-muted-foreground">
-              Adj hozzá legalább egy YouTube csatornát vagy podcast feedet a fenti űrlapból.
+              Futtass discovery-t, vagy adj hozzá legalább egy csatornát a fenti űrlapból.
             </div>
           ) : (
             channels.map((channel) => (

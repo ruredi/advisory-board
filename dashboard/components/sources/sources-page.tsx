@@ -1,84 +1,46 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Layers, Search, X as XIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Layers, Link2, Search, Cancel as XIcon } from "@/lib/icons";
 
-import { PageHeader } from "@/components/shared/page-header";
+import { SourceDetailModal } from "@/components/sources/source-detail-modal";
+import { AddSourceLinkModal } from "@/components/sources/add-source-link-modal";
 import { QueryError } from "@/components/shared/api-guard";
+import { PageHeader } from "@/components/shared/page-header";
+import { SourceIdentity } from "@/components/shared/source-identity";
+import { SourceStatusChip } from "@/components/shared/source-status-chip";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ChannelTypeIcon } from "@/components/channels/channel-type-icon";
+import { DiscoveryLimitButton } from "@/components/sources/discovery-limit-button";
+import { ProcessLimitButton } from "@/components/sources/process-limit-button";
+import { SourcePipelineProgress } from "@/components/sources/source-pipeline-progress";
+import { SourceRowActions } from "@/components/sources/source-row-actions";
+import { useSourceDiscovery } from "@/components/sources/use-source-discovery";
+import { Label } from "@/components/ui/label";
 import {
-  ChannelTypeIcon,
-  ChannelTypeIconMini,
-  resolveSourceIconType,
-} from "@/components/channels/channel-type-icon";
-import { fetchSource, fetchSources, fetchSourceStats, patchSource } from "@/lib/api/client";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { fetchAllSourceStats, fetchAllSources, ALL_PERSONAS, fetchSources, fetchSourceStats } from "@/lib/api/client";
 import type { SourceItem, SourcePlatformStat } from "@/lib/api/types";
-import { formatDateTime } from "@/lib/format";
+import { usePersonaOptions } from "@/lib/hooks/use-persona-options";
 import { usePersonaPageState } from "@/lib/hooks/use-persona-page";
+import { formatSourceDateStack } from "@/lib/format";
+import {
+  sortSourceStatusEntries,
+  sourceStatusMeta,
+  SOURCE_ACTIVE_STATUSES,
+  SOURCE_STATUS_ORDER,
+} from "@/lib/source-status";
 import { cn } from "@/lib/utils";
-
-const STATUS_META: Record<string, { label: string; chipClass: string; dotClass: string }> = {
-  pending: {
-    label: "várakozó",
-    chipClass: "bg-amber-500/10 text-amber-700 border-amber-500/25 dark:text-amber-400",
-    dotClass: "bg-amber-500",
-  },
-  fetching: {
-    label: "letöltés",
-    chipClass: "bg-blue-500/10 text-blue-700 border-blue-500/25 dark:text-blue-400",
-    dotClass: "bg-blue-500 animate-pulse",
-  },
-  fetched: {
-    label: "letöltve",
-    chipClass: "bg-blue-500/10 text-blue-700 border-blue-500/25 dark:text-blue-400",
-    dotClass: "bg-blue-500",
-  },
-  processing: {
-    label: "feldolgozás",
-    chipClass: "bg-sky-500/10 text-sky-700 border-sky-500/25 dark:text-sky-400",
-    dotClass: "bg-sky-500 animate-pulse",
-  },
-  processed: {
-    label: "feldolgozva",
-    chipClass: "bg-sky-500/10 text-sky-700 border-sky-500/25 dark:text-sky-400",
-    dotClass: "bg-sky-500",
-  },
-  extracting: {
-    label: "kinyerés",
-    chipClass: "bg-violet-500/10 text-violet-700 border-violet-500/25 dark:text-violet-400",
-    dotClass: "bg-violet-500 animate-pulse",
-  },
-  indexed: {
-    label: "indexelve",
-    chipClass: "bg-emerald-500/10 text-emerald-700 border-emerald-500/25 dark:text-emerald-400",
-    dotClass: "bg-emerald-500",
-  },
-  failed: {
-    label: "hibás",
-    chipClass: "bg-red-500/10 text-red-700 border-red-500/25 dark:text-red-400",
-    dotClass: "bg-red-500",
-  },
-  skipped: {
-    label: "kihagyva",
-    chipClass: "bg-zinc-500/10 text-zinc-600 border-zinc-500/25 dark:text-zinc-400",
-    dotClass: "bg-zinc-400",
-  },
-};
-
-const STATUS_ORDER = [
-  "indexed",
-  "pending",
-  "fetching",
-  "fetched",
-  "processing",
-  "processed",
-  "extracting",
-  "failed",
-  "skipped",
-];
 
 /** Platform label (API) → icon type a ChannelTypeIcon-hoz. */
 const PLATFORM_ICON_TYPES: Record<string, string> = {
@@ -94,23 +56,18 @@ const PLATFORM_ICON_TYPES: Record<string, string> = {
   Web: "web",
 };
 
-function statusMeta(status: string) {
-  return (
-    STATUS_META[status] ?? {
-      label: status,
-      chipClass: "bg-muted text-muted-foreground border-border",
-      dotClass: "bg-muted-foreground",
-    }
-  );
-}
-
-function sortStatusEntries(counts: Record<string, number>): [string, number][] {
-  return Object.entries(counts).sort(([a], [b]) => {
-    const ia = STATUS_ORDER.indexOf(a);
-    const ib = STATUS_ORDER.indexOf(b);
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-  });
-}
+const PLATFORM_FILTER_TO_API: Record<string, string> = {
+  YouTube: "youtube",
+  Spotify: "spotify",
+  "Apple Podcasts": "apple_podcast",
+  Podcast: "podcast_rss",
+  X: "x",
+  Instagram: "instagram",
+  Facebook: "facebook",
+  LinkedIn: "linkedin",
+  TikTok: "tiktok",
+  Web: "web",
+};
 
 function StatusChip({
   status,
@@ -123,13 +80,15 @@ function StatusChip({
   active: boolean;
   onClick: () => void;
 }) {
-  const meta = statusMeta(status);
+  const meta = sourceStatusMeta(status);
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="xs"
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all",
+        "h-auto rounded-full px-2.5 py-1 text-xs font-medium",
         meta.chipClass,
         active
           ? "ring-2 ring-primary/40 ring-offset-1 ring-offset-background"
@@ -139,7 +98,7 @@ function StatusChip({
       <span className={cn("size-1.5 rounded-full", meta.dotClass)} aria-hidden />
       {meta.label}
       <span className="tabular-nums">{count}</span>
-    </button>
+    </Button>
   );
 }
 
@@ -158,11 +117,12 @@ function PlatformCard({
   const iconType = PLATFORM_ICON_TYPES[stat.platform] ?? "web";
 
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
       onClick={onClick}
       className={cn(
-        "group flex flex-col gap-2 rounded-xl bg-card p-3 text-left ring-1 transition-all",
+        "group h-auto flex-col items-stretch gap-2 rounded-xl bg-card p-3 text-left ring-1 transition-all hover:bg-card",
         active
           ? "ring-2 ring-primary shadow-sm"
           : "ring-foreground/10 hover:ring-foreground/25 hover:shadow-sm"
@@ -185,7 +145,7 @@ function PlatformCard({
           style={{ width: `${Math.round(ratio * 100)}%` }}
         />
       </div>
-    </button>
+    </Button>
   );
 }
 
@@ -202,11 +162,12 @@ function AllPlatformsCard({
 }) {
   const ratio = total > 0 ? indexed / total : 0;
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
       onClick={onClick}
       className={cn(
-        "group flex flex-col gap-2 rounded-xl bg-card p-3 text-left ring-1 transition-all",
+        "group h-auto flex-col items-stretch gap-2 rounded-xl bg-card p-3 text-left ring-1 transition-all hover:bg-card",
         active
           ? "ring-2 ring-primary shadow-sm"
           : "ring-foreground/10 hover:ring-foreground/25 hover:shadow-sm"
@@ -228,55 +189,80 @@ function AllPlatformsCard({
           style={{ width: `${Math.round(ratio * 100)}%` }}
         />
       </div>
-    </button>
+    </Button>
   );
 }
 
-export function SourcesPageClient() {
+export function SourcesPageStandalone() {
   const { personaId, setPersonaId } = usePersonaPageState();
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Források"
+        description="Link hozzáadás, forrás keresés és feldolgozás — státusz és részletek."
+        personaId={personaId}
+        onPersonaChange={setPersonaId}
+        personaAllowAll
+      />
+      <SourcesPageClient personaId={personaId} />
+    </div>
+  );
+}
+
+export function SourcesPageClient({ personaId }: { personaId: string }) {
+  const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
+  const { personas } = usePersonaOptions();
+  const showAllPersonas = personaId === ALL_PERSONAS;
+  const personaLabels = useMemo(
+    () => Object.fromEntries(personas.map((persona) => [persona.persona_id, persona.display_name])),
+    [personas]
+  );
   const [status, setStatus] = useState("");
   const [platform, setPlatform] = useState("");
   const [search, setSearch] = useState("");
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const queryClient = useQueryClient();
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [addLinkOpen, setAddLinkOpen] = useState(false);
+
+  const discoveryPlatform = PLATFORM_FILTER_TO_API[platform] ?? "";
+  const discoveryPersonaId = showAllPersonas ? "" : personaId;
+  const discovery = useSourceDiscovery(discoveryPersonaId, discoveryPlatform);
+  const discoveryActive = discovery.isRunning && discovery.isDiscoverOnlyJob;
+  const processActive = discovery.isRunning && discovery.isProcessJob;
+  const pipelineActive = discoveryActive || processActive;
+  const anyJobRunning = discovery.isRunning;
+
+  const sourcesPollInterval = (sources: SourceItem[]) => {
+    const hasActiveSources = sources.some((item) => SOURCE_ACTIVE_STATUSES.includes(item.status));
+    return pipelineActive || hasActiveSources ? 2000 : false;
+  };
+
+  const sourcesQueryKey = ["sources", personaId, status, platform, search] as const;
+  const getSourcesPollInterval = () =>
+    sourcesPollInterval(queryClient.getQueryData<SourceItem[]>(sourcesQueryKey) ?? []);
 
   const statsQuery = useQuery({
     queryKey: ["source-stats", personaId],
-    queryFn: () => fetchSourceStats(personaId),
-    enabled: Boolean(personaId),
+    queryFn: () => (showAllPersonas ? fetchAllSourceStats() : fetchSourceStats(personaId)),
+    enabled: showAllPersonas || Boolean(personaId),
+    refetchInterval: getSourcesPollInterval,
   });
+
+  const sourceParams = Object.fromEntries(
+    Object.entries({ status, platform, search, limit: "500" }).filter(([, value]) => Boolean(value))
+  );
 
   const sourcesQuery = useQuery({
-    queryKey: ["sources", personaId, status, platform, search],
+    queryKey: sourcesQueryKey,
     queryFn: () =>
-      fetchSources(
-        personaId,
-        Object.fromEntries(
-          Object.entries({ status, platform, search, limit: "500" }).filter(([, value]) =>
-            Boolean(value)
-          )
-        )
-      ),
-    enabled: Boolean(personaId),
-  });
-
-  const detailQuery = useQuery({
-    queryKey: ["source", personaId, selectedId],
-    queryFn: () => fetchSource(personaId, selectedId!),
-    enabled: selectedId !== null,
-  });
-
-  const patchMutation = useMutation({
-    mutationFn: ({ sourceId, nextStatus }: { sourceId: number; nextStatus: string }) =>
-      patchSource(personaId, sourceId, nextStatus),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["sources", personaId] });
-      queryClient.invalidateQueries({ queryKey: ["source-stats", personaId] });
-      if (selectedId) queryClient.invalidateQueries({ queryKey: ["source", personaId, selectedId] });
-    },
+      showAllPersonas ? fetchAllSources(sourceParams) : fetchSources(personaId, sourceParams),
+    enabled: showAllPersonas || Boolean(personaId),
+    refetchInterval: (query) => sourcesPollInterval(query.state.data ?? []),
   });
 
   const stats = statsQuery.data;
+  const sources = sourcesQuery.data ?? [];
 
   // A státusz chipek a kiválasztott platform bontását mutatják, ha van szűrés.
   const statusCounts = useMemo(() => {
@@ -285,28 +271,43 @@ export function SourcesPageClient() {
     return stats.platforms.find((p) => p.platform === platform)?.status_counts ?? {};
   }, [stats, platform]);
 
-  const sources = sourcesQuery.data ?? [];
-  const detail = detailQuery.data;
   const hasFilter = Boolean(status || platform || search);
+
+  useEffect(() => {
+    if (selectedIndex === null || showAllPersonas) return;
+    const current = sources[selectedIndex];
+    if (!current || current.persona_id !== personaId) setSelectedIndex(null);
+  }, [personaId, showAllPersonas, selectedIndex, sources]);
+
+  useEffect(() => {
+    const sourceParam = searchParams.get("source");
+    if (!sourceParam || showAllPersonas || sources.length === 0) return;
+    const parsed = Number.parseInt(sourceParam, 10);
+    if (Number.isNaN(parsed)) return;
+    const index = sources.findIndex(
+      (source) => source.id === parsed && source.persona_id === personaId
+    );
+    if (index >= 0) setSelectedIndex(index);
+  }, [searchParams, showAllPersonas, personaId, sources]);
+
+  useEffect(() => {
+    if (selectedIndex !== null && selectedIndex >= sources.length) {
+      setSelectedIndex(sources.length > 0 ? Math.max(0, sources.length - 1) : null);
+    }
+  }, [sources.length, selectedIndex]);
 
   const togglePlatform = (value: string) => {
     setPlatform((current) => (current === value ? "" : value));
-    setSelectedId(null);
+    setSelectedIndex(null);
   };
   const toggleStatus = (value: string) => {
     setStatus((current) => (current === value ? "" : value));
-    setSelectedId(null);
+    setSelectedIndex(null);
   };
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Források"
-        description="Source lista platformonként, státusz kezelés, részletek."
-        personaId={personaId}
-        onPersonaChange={setPersonaId}
-      />
-
+      <AddSourceLinkModal open={addLinkOpen} onOpenChange={setAddLinkOpen} personaId={personaId} />
       <QueryError error={sourcesQuery.error ?? statsQuery.error} />
 
       {statsQuery.isLoading ? (
@@ -334,23 +335,48 @@ export function SourcesPageClient() {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
-        {sortStatusEntries(statusCounts).map(([statusKey, count]) => (
-          <StatusChip
-            key={statusKey}
-            status={statusKey}
-            count={count}
-            active={status === statusKey}
-            onClick={() => toggleStatus(statusKey)}
-          />
-        ))}
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex min-w-44 flex-col gap-1.5">
+          <Label className="text-xs text-muted-foreground">Státusz</Label>
+          <Select
+            value={status || "__all__"}
+            onValueChange={(value) => {
+              setStatus(value === "__all__" ? "" : value);
+              setSelectedIndex(null);
+            }}
+          >
+            <SelectTrigger className="h-8">
+              <SelectValue placeholder="Minden státusz" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">Minden státusz</SelectItem>
+              {SOURCE_STATUS_ORDER.map((statusKey) => (
+                <SelectItem key={statusKey} value={statusKey}>
+                  {sourceStatusMeta(statusKey).label}
+                  {statusCounts[statusKey] !== undefined ? ` (${statusCounts[statusKey]})` : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {sortSourceStatusEntries(statusCounts).map(([statusKey, count]) => (
+            <StatusChip
+              key={statusKey}
+              status={statusKey}
+              count={count}
+              active={status === statusKey}
+              onClick={() => toggleStatus(statusKey)}
+            />
+          ))}
+        </div>
         <div className="relative ml-auto">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <input
+          <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Keresés cím/URL..."
-            className="w-64 rounded-md border bg-background py-2 pr-3 pl-8 text-sm"
+            className="w-64 pl-8"
           />
         </div>
         {hasFilter ? (
@@ -369,9 +395,19 @@ export function SourcesPageClient() {
         ) : null}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
-        <Card>
-          <CardHeader>
+      <SourceDetailModal
+        open={selectedIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedIndex(null);
+        }}
+        sources={sources}
+        selectedIndex={selectedIndex}
+        onSelectedIndexChange={setSelectedIndex}
+        personaLabels={personaLabels}
+      />
+
+      <Card>
+          <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
             <CardTitle className="flex items-baseline gap-2">
               Források
               <span className="text-sm font-normal text-muted-foreground tabular-nums">
@@ -379,7 +415,97 @@ export function SourcesPageClient() {
                 {sources.length === 500 ? "+" : ""} találat
               </span>
             </CardTitle>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button type="button" size="sm" variant="outline" onClick={() => setAddLinkOpen(true)}>
+                <Link2 className="size-3.5" />
+                Link hozzáadása
+              </Button>
+              {!showAllPersonas ? (
+                <>
+                  {anyJobRunning && discovery.trackedJob ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => discovery.stopDiscovery.mutate(discovery.trackedJob!.job_id)}
+                      disabled={discovery.stopDiscovery.isPending}
+                    >
+                      Leállítás
+                    </Button>
+                  ) : null}
+                  <DiscoveryLimitButton
+                    disabled={
+                      anyJobRunning ||
+                      discovery.startDiscovery.isPending ||
+                      discovery.startProcessing.isPending
+                    }
+                    isRunning={discoveryActive}
+                    onStart={(discoveryLimit) => discovery.startDiscovery.mutate(discoveryLimit)}
+                  />
+                  <ProcessLimitButton
+                    disabled={
+                      anyJobRunning ||
+                      discovery.startDiscovery.isPending ||
+                      discovery.startProcessing.isPending
+                    }
+                    isRunning={processActive}
+                    onStart={(processLimit) => discovery.startProcessing.mutate(processLimit)}
+                  />
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Kereséshez és feldolgozáshoz válassz advisort a fejlécben.
+                </p>
+              )}
+            </div>
           </CardHeader>
+
+          {!showAllPersonas &&
+          discovery.showProgress &&
+          discovery.trackedJob &&
+          discovery.isDiscoverOnlyJob ? (
+            <SourcePipelineProgress
+              personaId={personaId}
+              mode="discovery"
+              trackedJob={discovery.trackedJob}
+              relevantRun={discovery.relevantRun}
+              recentEvents={discovery.recentEvents}
+              isRunning={discovery.isRunning}
+              isFinished={discovery.isFinished}
+              onStop={() => discovery.stopDiscovery.mutate(discovery.trackedJob!.job_id)}
+              stopPending={discovery.stopDiscovery.isPending}
+            />
+          ) : null}
+
+          {!showAllPersonas && discovery.showProgress && discovery.trackedJob && discovery.isProcessJob ? (
+            <SourcePipelineProgress
+              personaId={personaId}
+              mode="process"
+              trackedJob={discovery.trackedJob}
+              relevantRun={discovery.relevantRun}
+              recentEvents={discovery.recentEvents}
+              isRunning={discovery.isRunning}
+              isFinished={discovery.isFinished}
+              onStop={() => discovery.stopProcessing.mutate(discovery.trackedJob!.job_id)}
+              stopPending={discovery.stopProcessing.isPending}
+            />
+          ) : null}
+
+          {!showAllPersonas && discovery.startDiscovery.isError ? (
+            <p className="border-b px-(--card-spacing) py-2 text-sm text-destructive">
+              {discovery.startDiscovery.error instanceof Error
+                ? discovery.startDiscovery.error.message
+                : "Nem sikerült elindítani a keresést."}
+            </p>
+          ) : null}
+
+          {!showAllPersonas && discovery.startProcessing.isError ? (
+            <p className="border-b px-(--card-spacing) py-2 text-sm text-destructive">
+              {discovery.startProcessing.error instanceof Error
+                ? discovery.startProcessing.error.message
+                : "Nem sikerült elindítani a feldolgozást."}
+            </p>
+          ) : null}
+
           <CardContent className="max-h-[38rem] overflow-auto px-0">
             {sourcesQuery.isLoading ? (
               <div className="space-y-2 px-(--card-spacing)">
@@ -392,63 +518,87 @@ export function SourcesPageClient() {
                 {hasFilter ? "Nincs a szűrésnek megfelelő forrás." : "Még nincs forrás."}
               </p>
             ) : (
-              <table className="w-full text-sm">
+              <table className="w-full table-fixed text-sm">
                 <thead className="sticky top-0 z-10 bg-card">
                   <tr className="border-b text-left text-xs text-muted-foreground uppercase tracking-wide">
                     <th className="py-2 pr-2 pl-(--card-spacing) font-medium">Forrás</th>
-                    <th className="py-2 pr-2 font-medium">Státusz</th>
-                    <th className="py-2 pr-(--card-spacing) text-right font-medium">Dátum</th>
+                    <th className="w-24 py-2 pr-2 font-medium">Státusz</th>
+                    {showAllPersonas ? (
+                      <th className="w-28 py-2 pr-2 font-medium">Advisor</th>
+                    ) : null}
+                    <th className="w-20 py-2 pr-(--card-spacing) text-right font-medium">Dátum</th>
+                    <th className="w-24 py-2 pr-(--card-spacing) text-right font-medium">Művelet</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sources.map((source: SourceItem) => {
-                    const meta = statusMeta(source.status);
-                    const iconType = resolveSourceIconType(
-                      source.source_type,
-                      source.source_url,
-                      source.channel_url ?? ""
-                    );
+                  {sources.map((source: SourceItem, index: number) => {
+                    const isSelected = selectedIndex === index;
+                    const dateParts = formatSourceDateStack(source.source_date);
                     return (
                       <tr
-                        key={source.id}
+                        key={`${source.persona_id}-${source.id}`}
                         className={cn(
                           "cursor-pointer border-b transition-colors last:border-b-0 hover:bg-muted/50",
-                          selectedId === source.id && "bg-muted"
+                          isSelected && "bg-muted"
                         )}
-                        onClick={() => setSelectedId(source.id)}
+                        onClick={() => setSelectedIndex(index)}
                       >
                         <td className="max-w-0 py-2.5 pr-2 pl-(--card-spacing)">
-                          <div className="flex items-center gap-2.5">
-                            <ChannelTypeIconMini type={iconType} />
-                            <div className="min-w-0">
-                              <p className="truncate font-medium">
-                                {source.source_title || source.source_url}
-                              </p>
-                              <p className="truncate text-xs text-muted-foreground">
+                          <SourceIdentity
+                            title={source.source_title}
+                            sourceUrl={source.source_url}
+                            sourceType={source.source_type}
+                            channelUrl={source.channel_url}
+                            subtitle={
+                              <>
                                 {source.platform}
                                 {source.error_message ? (
                                   <span className="text-red-500"> · {source.error_message}</span>
                                 ) : null}
-                              </p>
-                            </div>
-                          </div>
+                              </>
+                            }
+                          />
                         </td>
                         <td className="py-2.5 pr-2 whitespace-nowrap">
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium",
-                              meta.chipClass
-                            )}
-                          >
-                            <span
-                              className={cn("size-1.5 rounded-full", meta.dotClass)}
-                              aria-hidden
-                            />
-                            {meta.label}
-                          </span>
+                          <SourceStatusChip status={source.status} />
                         </td>
-                        <td className="py-2.5 pr-(--card-spacing) text-right text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-                          {source.source_date ?? "—"}
+                        {showAllPersonas ? (
+                          <td className="max-w-0 py-2.5 pr-2">
+                            <p
+                              className="truncate text-xs text-muted-foreground"
+                              title={personaLabels[source.persona_id] ?? source.persona_id}
+                            >
+                              {personaLabels[source.persona_id] ?? source.persona_id}
+                            </p>
+                          </td>
+                        ) : null}
+                        <td className="py-2.5 pr-2 text-right align-middle">
+                          {dateParts ? (
+                            <div className="leading-tight">
+                              <p className="text-xs tabular-nums">{dateParts.date}</p>
+                              {dateParts.time ? (
+                                <p className="text-[10px] text-muted-foreground tabular-nums">
+                                  {dateParts.time}
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 pr-(--card-spacing) align-middle">
+                          <SourceRowActions
+                            source={source}
+                            disabled={anyJobRunning}
+                            onProcessStarted={(job) => discovery.trackJob(job.job_id)}
+                            onDeleted={() => {
+                              if (selectedIndex === index) {
+                                setSelectedIndex(null);
+                              } else if (selectedIndex !== null && index < selectedIndex) {
+                                setSelectedIndex(selectedIndex - 1);
+                              }
+                            }}
+                          />
                         </td>
                       </tr>
                     );
@@ -458,129 +608,6 @@ export function SourcesPageClient() {
             )}
           </CardContent>
         </Card>
-
-        <Card className="self-start xl:sticky xl:top-6">
-          <CardHeader>
-            <CardTitle>Részletek</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            {!selectedId ? (
-              <p className="text-muted-foreground">Válassz forrást a listából.</p>
-            ) : null}
-            {selectedId && detailQuery.isLoading ? (
-              <div className="space-y-2">
-                <Skeleton className="h-5 w-3/4 rounded" />
-                <Skeleton className="h-4 w-1/2 rounded" />
-                <Skeleton className="h-24 rounded" />
-              </div>
-            ) : null}
-            {detail ? (
-              <>
-                <div className="flex items-start gap-3">
-                  <ChannelTypeIcon
-                    type={resolveSourceIconType(
-                      detail.source_type,
-                      detail.source_url,
-                      detail.channel_url ?? ""
-                    )}
-                  />
-                  <div className="min-w-0 space-y-1">
-                    <p className="font-medium leading-snug">
-                      {detail.source_title || detail.source_url}
-                    </p>
-                    <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      {detail.platform}
-                      <span
-                        className={cn(
-                          "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-medium",
-                          statusMeta(detail.status).chipClass
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "size-1.5 rounded-full",
-                            statusMeta(detail.status).dotClass
-                          )}
-                          aria-hidden
-                        />
-                        {statusMeta(detail.status).label}
-                      </span>
-                    </p>
-                  </div>
-                </div>
-
-                <a
-                  href={detail.source_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex max-w-full items-center gap-1.5 text-xs text-primary underline underline-offset-2"
-                >
-                  <ExternalLink className="size-3.5 shrink-0" />
-                  <span className="truncate">{detail.source_url}</span>
-                </a>
-
-                {detail.error_message ? (
-                  <div className="rounded-md border border-red-500/25 bg-red-500/10 p-2.5 text-xs text-red-700 dark:text-red-400">
-                    {detail.error_message}
-                  </div>
-                ) : null}
-
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                  <dt className="text-muted-foreground">Knowledge unitok</dt>
-                  <dd className="text-right font-medium tabular-nums">{detail.unit_count}</dd>
-                  {detail.source_date ? (
-                    <>
-                      <dt className="text-muted-foreground">Publikálva</dt>
-                      <dd className="text-right tabular-nums">{detail.source_date}</dd>
-                    </>
-                  ) : null}
-                  {detail.processed_at ? (
-                    <>
-                      <dt className="text-muted-foreground">Feldolgozva</dt>
-                      <dd className="text-right tabular-nums">
-                        {formatDateTime(detail.processed_at)}
-                      </dd>
-                    </>
-                  ) : null}
-                </dl>
-
-                <div className="flex flex-wrap gap-2">
-                  {detail.status !== "pending" ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={patchMutation.isPending}
-                      onClick={() =>
-                        patchMutation.mutate({ sourceId: selectedId!, nextStatus: "pending" })
-                      }
-                    >
-                      Újra sorba állít
-                    </Button>
-                  ) : null}
-                  {detail.status !== "skipped" ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={patchMutation.isPending}
-                      onClick={() =>
-                        patchMutation.mutate({ sourceId: selectedId!, nextStatus: "skipped" })
-                      }
-                    >
-                      Kihagy
-                    </Button>
-                  ) : null}
-                </div>
-
-                {detail.processed_text ? (
-                  <pre className="max-h-64 overflow-auto rounded-md border bg-muted/30 p-2.5 text-xs whitespace-pre-wrap">
-                    {detail.processed_text}
-                  </pre>
-                ) : null}
-              </>
-            ) : null}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }

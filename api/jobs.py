@@ -77,6 +77,15 @@ class JobManager:
             record.status = "succeeded" if exit_code == 0 else "failed"
             record.finished_at = datetime.now(timezone.utc).isoformat()
             record._process = None
+        from memory_builder.storage.sqlite_store import SQLiteStore
+        from memory_builder.telemetry.run_watchdog import close_open_runs_for_persona
+
+        store = SQLiteStore(record.persona_id, ROOT)
+        store.initialize()
+        try:
+            close_open_runs_for_persona(store, record.persona_id)
+        finally:
+            store.close()
 
     def list_jobs(self) -> list[JobRecord]:
         with self._lock:

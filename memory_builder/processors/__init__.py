@@ -18,9 +18,22 @@ def process_source(
     *,
     transcription_model: str = "gemini-2.5-flash",
     source_title: str = "",
+    display_name: str = "",
+    speaker_names: list[str] | None = None,
+    speaker_labeled_transcription: bool = False,
+    allow_unlabeled_fallback: bool = False,
 ):
     if source_type == SourceType.YOUTUBE:
-        document = process_youtube(persona_id, source_url, root)
+        document = process_youtube(
+            persona_id,
+            source_url,
+            root,
+            transcription_model=transcription_model,
+            display_name=display_name,
+            speaker_names=speaker_names,
+            speaker_labeled_transcription=speaker_labeled_transcription,
+            allow_unlabeled_fallback=allow_unlabeled_fallback,
+        )
     elif source_type == SourceType.PDF:
         document = process_pdf(persona_id, source_url, root)
     elif source_type == SourceType.SOCIAL and social_platform(source_url):
@@ -32,6 +45,9 @@ def process_source(
             root,
             transcription_model=transcription_model,
             title=source_title,
+            display_name=display_name,
+            speaker_names=speaker_names,
+            speaker_labeled_transcription=speaker_labeled_transcription,
         )
     elif source_type in {SourceType.WEB, SourceType.PODCAST}:
         document = process_web_article(persona_id, source_url, root)

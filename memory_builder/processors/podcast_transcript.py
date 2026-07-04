@@ -11,8 +11,9 @@ import httpx
 from memory_builder.fetch.downloader import save_json_metadata, save_raw_bytes, source_slug
 from memory_builder.gemini_client import build_gemini_client
 from memory_builder.models import ProcessedDocument, SourceNature
-from memory_builder.telemetry.context import get_run_context
 from memory_builder.paths import project_root, sources_processed_dir
+from memory_builder.processors.transcript_pipeline import build_diarized_document_text
+from memory_builder.telemetry.context import get_run_context
 
 
 AUDIO_EXTENSIONS = (".mp3", ".m4a", ".wav", ".aac", ".ogg")
@@ -118,13 +119,17 @@ def process_podcast(
     *,
     transcription_model: str = "gemini-2.5-flash",
     title: str = "",
+    display_name: str = "",
+    speaker_names: list[str] | None = None,
+    speaker_labeled_transcription: bool = False,
 ) -> ProcessedDocument:
     if not is_podcast_audio_url(source_url):
         raise ValueError(f"Not a direct podcast audio URL: {source_url}")
 
     base_root = root or project_root()
     audio_path, headers = download_podcast_audio(source_url, persona_id, base_root)
-    transcript = transcribe_audio_with_gemini(audio_path, transcription_model)
+    processed_dir = sources_processed_dir(persona_id, base_root) / source_slug(source_url)
+    processed_dir.mkdir(parents=True, exist_ok=True)
 
     metadata = {
         "source_url": source_url,
@@ -132,14 +137,34 @@ def process_podcast(
         "content_type": headers.get("content-type", ""),
         "transcription_model": transcription_model,
         "title": title or source_url,
+        "display_name": display_name,
+        "speaker_names": speaker_names or [],
     }
+
+    if speaker_labeled_transcription and display_name:
+        extraction_input, segments, artifact_paths = build_diarized_document_text(
+            audio_path=audio_path,
+            transcription_model=transcription_model,
+            display_name=display_name,
+            speaker_names=speaker_names or [],
+            processed_dir=processed_dir,
+        )
+        metadata.update(
+            {
+                "transcription_mode": "diarized",
+                "segment_count": len(segments.segments),
+                "target_segment_count": sum(1 for segment in segments.segments if segment.speaker_type == "target"),
+                **{f"path_{key}": value for key, value in artifact_paths.items()},
+            }
+        )
+        transcript = extraction_input
+    else:
+        transcript = transcribe_audio_with_gemini(audio_path, transcription_model)
+        metadata["transcription_mode"] = "plain"
+        (processed_dir / "document.txt").write_text(transcript, encoding="utf-8")
+        (processed_dir / "transcript.txt").write_text(transcript, encoding="utf-8")
+
     save_json_metadata(persona_id, source_url, metadata, base_root)
-
-    processed_dir = sources_processed_dir(persona_id, base_root) / source_slug(source_url)
-    processed_dir.mkdir(parents=True, exist_ok=True)
-    (processed_dir / "document.txt").write_text(transcript, encoding="utf-8")
-    (processed_dir / "transcript.txt").write_text(transcript, encoding="utf-8")
-
     doc_title = title or _title_from_url(source_url)
     return ProcessedDocument(
         title=doc_title,

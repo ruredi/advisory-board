@@ -9,7 +9,10 @@ import feedparser
 import httpx
 
 from memory_builder.discovery.seed_links import classify_source_type, infer_source_nature, is_processable_source
+from memory_builder.discovery.source_emit import OnSourceRecord
+from memory_builder.discovery.watermarks import is_newer_than
 from memory_builder.models import SourceRecord, SourceStatus
+from memory_builder.telemetry.discovery_events import discovery_log
 from memory_builder.storage.sqlite_store import normalize_url
 
 
@@ -112,13 +115,6 @@ def _entry_published_iso(entry: feedparser.FeedParserDict) -> str | None:
     return None
 
 
-def _is_newer_than_watermark(published_iso: str | None, watermark_iso: str | None) -> bool:
-    if watermark_iso is None:
-        return True
-    if published_iso is None:
-        return True
-    return published_iso > watermark_iso
-
 
 def discover_podcast_rss_feed(
     persona_id: str,
@@ -127,7 +123,10 @@ def discover_podcast_rss_feed(
     channel_url: str,
     seen: set[str],
     watermark: str | None = None,
+    on_record: OnSourceRecord | None = None,
 ) -> tuple[list[SourceRecord], str | None]:
+    watermark_note = f" (watermark: {watermark[:10]})" if watermark else " (watermark: nincs)"
+    discovery_log(f"Podcast RSS: feed beolvasása{watermark_note} — {feed_url}")
     parsed = feedparser.parse(feed_url)
     records: list[SourceRecord] = []
     max_published: str | None = watermark
@@ -136,7 +135,7 @@ def discover_podcast_rss_feed(
         if not link or link in seen:
             continue
         published = _entry_published_iso(entry)
-        if not _is_newer_than_watermark(published, watermark):
+        if not is_newer_than(published, watermark):
             continue
         if not is_processable_source(link) and not link.startswith("podcast-entry:"):
             if not any(token in link for token in ("episode.flightcast.com", ".mp3", ".m4a")):
@@ -146,18 +145,21 @@ def discover_podcast_rss_feed(
         if link.startswith("podcast-entry:") or urlparse(link).path.endswith((".mp3", ".m4a")):
             source_type = classify_source_type("https://open.spotify.com/episode/example")
         title = getattr(entry, "title", link) or link
-        records.append(
-            SourceRecord(
-                persona_id=persona_id,
-                source_url=link,
-                source_title=title,
-                source_type=source_type,
-                source_date=published,
-                source_nature=infer_source_nature(source_type, link),
-                status=SourceStatus.PENDING,
-                channel_url=channel_url,
-            )
+        record = SourceRecord(
+            persona_id=persona_id,
+            source_url=link,
+            source_title=title,
+            source_type=source_type,
+            source_date=published,
+            source_nature=infer_source_nature(source_type, link),
+            status=SourceStatus.PENDING,
+            channel_url=channel_url,
         )
         if published and (max_published is None or published > max_published):
             max_published = published
+        if on_record is not None:
+            if not on_record(record):
+                break
+        records.append(record)
+    discovery_log(f"Podcast RSS: {len(records)} epizód — {feed_url}")
     return records, max_published

@@ -6,8 +6,9 @@ import { formatDurationSeconds, parseUtcTimestamp } from "@/lib/format";
 
 export function useElapsedDuration(
   startedAt: string,
-  finishedAt: string | null,
+  stoppedAt: string | null,
   isRunning: boolean,
+  fixedDurationSeconds?: number,
 ): string {
   const [now, setNow] = useState(() => Date.now());
 
@@ -20,8 +21,12 @@ export function useElapsedDuration(
     return () => window.clearInterval(id);
   }, [isRunning]);
 
+  if (!isRunning && fixedDurationSeconds !== undefined) {
+    return formatDurationSeconds(fixedDurationSeconds);
+  }
+
   const startMs = parseUtcTimestamp(startedAt);
-  const endMs = finishedAt ? parseUtcTimestamp(finishedAt) : now;
+  const endMs = stoppedAt ? parseUtcTimestamp(stoppedAt) : now;
   const elapsedSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
 
   return formatDurationSeconds(elapsedSeconds);

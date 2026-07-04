@@ -215,7 +215,43 @@ Per-source dates in SQLite:
 
 ### Podcast processing
 
-Discovery, dedup, and date tracking work for podcast RSS / Spotify shows. **Audio episodes** (`*.mp3` enclosures, Flightcast URLs) are transcribed via **Gemini** (`GOOGLE_API_KEY` / `GEMINI_API_KEY`) into `transcript.txt` + `document.txt`.
+Discovery, dedup, and date tracking work for podcast RSS / Spotify shows. **Audio episodes** (`*.mp3` enclosures, Flightcast URLs) are transcribed via **Gemini** (`GOOGLE_API_KEY` / `GEMINI_API_KEY`).
+
+When `speaker_labeled_transcription: true` in persona config (pilot: Hormozi), podcast and YouTube audio use **Gemini diarization** instead of plain transcript text. The pipeline stores multiple transcript variants per source slug under `sources/processed/{persona}/{slug}/`:
+
+| File | Purpose |
+|---|---|
+| `transcript_segments.json` | Structured Gemini output: speaker, `speaker_type`, text, timestamps |
+| `transcript_labeled.txt` | Full human-readable labeled transcript (`Alex Hormozi:` / `Speaker 1:`) |
+| `document.txt` | Full labeled transcript for dashboard audit/preview |
+| `persona_transcript.txt` | Target persona turns only |
+| `extraction_input.txt` | Exact text sent to extraction (target blocks + `CONTEXT_ONLY` host context) |
+| `transcript.txt` | Legacy alias of extraction input |
+
+**Memory extraction** uses `extraction_input.txt` content (via `ProcessedDocument.text`), not the full transcript. `content_hash` is computed from the filtered extraction input, so re-diarization changes trigger re-extraction.
+
+Persona config flags:
+
+```yaml
+speaker_labeled_transcription: true   # podcast + youtube audio diarization
+allow_unlabeled_fallback: false       # if false, YouTube diarization failure is failed (no silent VTT fallback)
+```
+
+Quote guard rules:
+
+- Extract quotes **only** from target persona segments
+- Drop host/interviewer quotes even if Gemini returns them
+- Enrich accepted quotes with `source_url`, `segment_id`, `start_seconds`, `source_link` (YouTube: `?t=<seconds>`)
+
+Reprocess already-indexed YouTube/podcast sources for diarized rebuild (no discovery, no X/social/web):
+
+```bash
+python3 scripts/memory_build.py --persona hormozi --reprocess-transcripts
+python3 scripts/memory_build.py --persona hormozi --reprocess-transcripts --only youtube
+python3 scripts/memory_build.py --persona hormozi --reprocess-transcripts --limit 5
+```
+
+Only `indexed` `youtube` and `podcast` rows are reset to `pending` and reprocessed. Other pending sources (X, Instagram, web, …) are left untouched.
 
 Apple Podcasts episode **pages** (HTML) still use `process_web_article()` when the source URL is not a direct audio file.
 
@@ -225,11 +261,25 @@ Smoke test:
 # Quick smoke (first 45s only; needs ffmpeg)
 python3 scripts/test_podcast_transcript.py --persona hormozi --clip-seconds 45
 
+# Diarized smoke (uses persona config or --diarized)
+python3 scripts/test_podcast_transcript.py --persona hormozi --diarized --clip-seconds 45
+
 # Full latest episode from RSS (slow; uses persona transcription_model, default gemini-2.5-flash)
-python3 scripts/test_podcast_transcript.py --persona hormozi
+python3 scripts/test_podcast_transcript.py --persona hormozi --diarized
 ```
 
 YouTube remains preferred when the same episode exists on both platforms (title dedup).
+
+### Dashboard audit workflow
+
+The dashboard exposes source-backed memory inspection:
+
+- **Memory page** — semantic search (`searchMemory`), unit filters, frameworks/processes/steps/quotes on expanded cards
+- **Source detail tabs** — overview, full transcript, persona transcript, extraction input, segments JSON viewer, units + quotes
+- **API** — `/sources/{id}/transcripts/{variant}`, `/sources/{id}/segments`, `/units/{id}`, `/quotes`
+
+Transcript status on source detail: `labeled`, `unlabeled`, `fallback`, `failed_diarization`.
+
 
 ## Social media (Scrapfly)
 
@@ -348,6 +398,7 @@ python3 scripts/memory_build.py --persona hormozi --dry-run          # discover 
 python3 scripts/memory_build.py --persona hormozi --profiles-only    # gate + approved profiles
 python3 scripts/memory_build.py --persona hormozi --skip-source-review  # emergency only
 python3 scripts/memory_build.py --persona hormozi --retry-failed     # reset failed → pending, reprocess
+python3 scripts/memory_build.py --persona hormozi --reprocess-transcripts  # indexed youtube/podcast only, no discovery
 
 # Platform filter: limits social Scrapfly discovery + processing (+ retry-failed reset)
 python3 scripts/memory_build.py --persona hormozi --only instagram
@@ -455,7 +506,7 @@ Core fields:
 | `concepts` | JSON array of concepts |
 | `advice_contexts` | JSON array of situations this applies to |
 | `examples` | JSON array of examples |
-| `quotes` | JSON array of quote objects with `text`, `is_verbatim`, `speaker` |
+| `quotes` | JSON array of quote objects with `text`, `is_verbatim`, `speaker`, optional `source_url`, `source_link`, `segment_id`, `start_seconds` |
 | `speaker` | Who taught this segment |
 | `source_nature` | `written`, `natural_spoken`, `performed_spoken`, `written_performed_as_speech`, `visual`, `mixed`, `uncertain` |
 | `evidence_type` | `source_supported`, `inferred_from_sources`, `insufficient_evidence` |
@@ -630,6 +681,10 @@ Unit tests:
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_memory*.py'
+python3 -m unittest tests.test_speaker_turns -v
+python3 -m unittest tests.test_knowledge_dedup -v
+python3 -m unittest tests.test_quote_guard -v
+python3 -m pytest tests/test_transcript_api.py -v
 python3 -m unittest discover -s tests -p 'test_retrieval_golden.py'
 python3 -m unittest tests.test_telemetry -v
 python3 -m unittest tests.test_profile_urls -v

@@ -1,0 +1,12 @@
+persona_id: buffett
+channels:
+- channel_id: web-site-berkshirehathaway-com
+  type: web_site
+  url: https://www.berkshirehathaway.com/
+  label: Berkshire Hathaway homepage
+  priority: 15
+  rss_url: null
+  apple_podcast_id: null
+  latest_published_at: null
+  last_discovered_at: null
+  added_at: '2026-07-03T18:23:41.606104+00:00'

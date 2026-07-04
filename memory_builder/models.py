@@ -68,6 +68,39 @@ class Confidence(StrEnum):
 
 from memory_builder.normalize import normalize_string_list
 
+MAX_EMBEDDING_METADATA_ITEMS = 12
+
+
+def build_embedding_text(
+    *,
+    chunk_text: str,
+    visual_description: str = "",
+    frameworks: Any = None,
+    processes: Any = None,
+    steps: Any = None,
+) -> str:
+    parts = [chunk_text, visual_description]
+    normalized_frameworks = normalize_string_list(frameworks)[:MAX_EMBEDDING_METADATA_ITEMS]
+    normalized_processes = normalize_string_list(processes)[:MAX_EMBEDDING_METADATA_ITEMS]
+    normalized_steps = normalize_string_list(steps)[:MAX_EMBEDDING_METADATA_ITEMS]
+    if normalized_frameworks:
+        parts.append("frameworks: " + ", ".join(normalized_frameworks))
+    if normalized_processes:
+        parts.append("processes: " + ", ".join(normalized_processes))
+    if normalized_steps:
+        parts.append("steps: " + " > ".join(normalized_steps))
+    return "\n".join(part for part in parts if part)
+
+
+def build_embedding_text_from_row(row: Any) -> str:
+    return build_embedding_text(
+        chunk_text=row["chunk_text"] or "",
+        visual_description=row["visual_description"] or "",
+        frameworks=json_loads(row["frameworks"]),
+        processes=json_loads(row["processes"]),
+        steps=json_loads(row["steps"]),
+    )
+
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -124,17 +157,13 @@ class KnowledgeUnit:
     id: int | None = None
 
     def embedding_text(self) -> str:
-        parts = [self.chunk_text, self.visual_description]
-        frameworks = normalize_string_list(self.frameworks)
-        processes = normalize_string_list(self.processes)
-        steps = normalize_string_list(self.steps)
-        if frameworks:
-            parts.append("frameworks: " + ", ".join(frameworks))
-        if processes:
-            parts.append("processes: " + ", ".join(processes))
-        if steps:
-            parts.append("steps: " + " > ".join(steps))
-        return "\n".join(part for part in parts if part)
+        return build_embedding_text(
+            chunk_text=self.chunk_text,
+            visual_description=self.visual_description,
+            frameworks=self.frameworks,
+            processes=self.processes,
+            steps=self.steps,
+        )
 
     def to_row(self) -> dict[str, Any]:
         data = asdict(self)
@@ -169,3 +198,5 @@ class PersonaConfig:
     vision_model: str = "gemini-2.5-flash"
     vector_store: str = "qdrant"
     qdrant_url: str | None = None
+    speaker_labeled_transcription: bool = False
+    allow_unlabeled_fallback: bool = False

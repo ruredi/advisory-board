@@ -28,6 +28,8 @@ STAGE_LABELS: dict[str, str] = {
     "source_skip": "skipped",
     "run_started": "started",
     "run_finished": "finished",
+    "run_interrupted": "interrupted",
+    "run_aborted": "aborted",
 }
 
 

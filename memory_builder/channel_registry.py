@@ -14,6 +14,7 @@ from memory_builder.paths import project_root
 
 CHANNEL_TYPE_PRIORITY = {
     "youtube_channel": 10,
+    "web_site": 15,
     "podcast_rss": 20,
     "apple_podcast": 20,
     "spotify_show": 25,
@@ -106,7 +107,12 @@ def _watch_feed_to_channel(feed: dict[str, str]) -> ContentChannel | None:
         return None
     if feed_type not in {"youtube_channel", "rss", "web"}:
         return None
-    channel_type = "youtube_channel" if feed_type == "youtube_channel" else "podcast_rss"
+    if feed_type == "youtube_channel":
+        channel_type = "youtube_channel"
+    elif feed_type == "web":
+        channel_type = "web_site"
+    else:
+        channel_type = "podcast_rss"
     label = feed.get("label", url)
     channel_id = channel_id_from_url(channel_type, url)
     return ContentChannel(

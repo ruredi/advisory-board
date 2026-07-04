@@ -7,8 +7,8 @@ channels:
   priority: 10
   rss_url: null
   apple_podcast_id: null
-  latest_published_at: null
-  last_discovered_at: '2026-07-02T16:00:33.406214+00:00'
+  latest_published_at: '2026-07-02 14:09:25'
+  last_discovered_at: '2026-07-03T17:34:22.552840+00:00'
   added_at: '2026-07-02T12:26:31.943938+00:00'
 - channel_id: podcast-rss-acquisition-com
   type: podcast_rss
@@ -18,7 +18,7 @@ channels:
   rss_url: https://www.acquisition.com/
   apple_podcast_id: null
   latest_published_at: null
-  last_discovered_at: '2026-07-02T16:00:33.406214+00:00'
+  last_discovered_at: '2026-07-03T17:34:22.552840+00:00'
   added_at: '2026-07-02T12:26:31.943978+00:00'
 - channel_id: podcast-rss-feeds-videos-xml
   type: podcast_rss
@@ -27,8 +27,8 @@ channels:
   priority: 20
   rss_url: https://www.youtube.com/feeds/videos.xml?channel_id=UCUyDOdBWhC1MCxEjC46d-zw
   apple_podcast_id: null
-  latest_published_at: '2026-07-01T23:02:21+00:00'
-  last_discovered_at: '2026-07-02T16:00:33.406214+00:00'
+  latest_published_at: '2026-07-03T15:01:50+00:00'
+  last_discovered_at: '2026-07-03T17:34:22.552840+00:00'
   added_at: '2026-07-02T12:26:31.943966+00:00'
 - channel_id: spotify-show-show-6ynopzkdgdwf0auipptiid
   type: spotify_show
@@ -38,5 +38,5 @@ channels:
   rss_url: https://rss2.flightcast.com/zz5nwp81tktx53wb8fw6qq7j.xml
   apple_podcast_id: '1254720112'
   latest_published_at: '2026-07-02T09:00:00+00:00'
-  last_discovered_at: '2026-07-02T16:00:33.406214+00:00'
+  last_discovered_at: '2026-07-03T17:34:22.552840+00:00'
   added_at: '2026-07-02T12:26:31.950413+00:00'

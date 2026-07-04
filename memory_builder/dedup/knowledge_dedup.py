@@ -5,6 +5,7 @@ from enum import Enum
 
 from memory_builder.models import ContentType, KnowledgeUnit
 from memory_builder.normalize import normalize_string_list
+from memory_builder.processors.speaker_turns import filter_speaker_content_labeled, is_labeled_transcript
 from memory_builder.storage.sqlite_store import content_fingerprint
 
 
@@ -23,9 +24,18 @@ SIMILARITY_DUPLICATE_THRESHOLD = 0.92
 SIMILARITY_REPEATED_IDEA_THRESHOLD = 0.78
 
 
-def filter_speaker_content(text: str, speaker_names: list[str]) -> str:
-    if not speaker_names:
+def filter_speaker_content(
+    text: str,
+    speaker_names: list[str],
+    *,
+    display_name: str = "",
+) -> str:
+    if not speaker_names and not display_name:
         return text
+    if is_labeled_transcript(text):
+        filtered = filter_speaker_content_labeled(text, display_name, speaker_names)
+        if filtered.strip():
+            return filtered
     kept: list[str] = []
     for paragraph in re.split(r"\n{2,}", text):
         lowered = paragraph.lower()

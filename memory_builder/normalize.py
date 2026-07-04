@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def normalize_string_list(value: Any) -> list[str]:
+def normalize_string_list(value: Any, *, max_items: int = 50) -> list[str]:
     """Coerce Gemini/list fields to hashable string lists."""
     if not value:
         return []
@@ -11,6 +11,8 @@ def normalize_string_list(value: Any) -> list[str]:
         value = [value]
     out: list[str] = []
     for item in value:
+        if len(out) >= max_items:
+            break
         if item is None:
             continue
         if isinstance(item, str):

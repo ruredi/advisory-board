@@ -6,13 +6,11 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Áttekintés" },
-  { href: "/runs", label: "Futások" },
+  { href: "/", label: "Dashboard" },
   { href: "/sources", label: "Források" },
   { href: "/memory", label: "Memória" },
+  { href: "/runs", label: "Futások" },
   { href: "/advisors", label: "Advisorok" },
-  { href: "/channels", label: "Forrás csatornák" },
-  { href: "/review", label: "Forrás review" },
   { href: "/costs", label: "Költségek" },
   { href: "/logs", label: "Logok" },
 ] as const;

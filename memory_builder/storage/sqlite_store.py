@@ -11,6 +11,10 @@ from memory_builder.models import KnowledgeUnit, SourceRecord, SourceStatus, jso
 from memory_builder.paths import db_path, project_root
 from memory_builder.pipeline.platform_filter import platform_sql_filter
 
+STOP_REASON_FINISHED = "finished"
+STOP_REASON_INTERRUPTED = "interrupted"
+STOP_REASON_FATAL_ERROR = "fatal_error"
+
 
 class SQLiteStore:
     def __init__(self, persona_id: str, root: Path | None = None) -> None:
@@ -47,6 +51,21 @@ class SQLiteStore:
         sync_columns = {row[1] for row in conn.execute("PRAGMA table_info(sync_runs)").fetchall()}
         if sync_columns and "cost_usd" not in sync_columns:
             conn.execute("ALTER TABLE sync_runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
+        if sync_columns and "last_activity_at" not in sync_columns:
+            conn.execute("ALTER TABLE sync_runs ADD COLUMN last_activity_at TEXT")
+            conn.execute(
+                "UPDATE sync_runs SET last_activity_at = COALESCE(finished_at, started_at) WHERE last_activity_at IS NULL"
+            )
+        if sync_columns and "stopped_at" not in sync_columns:
+            conn.execute("ALTER TABLE sync_runs ADD COLUMN stopped_at TEXT")
+            conn.execute("UPDATE sync_runs SET stopped_at = finished_at WHERE finished_at IS NOT NULL")
+        if sync_columns and "stop_reason" not in sync_columns:
+            conn.execute("ALTER TABLE sync_runs ADD COLUMN stop_reason TEXT")
+            conn.execute("UPDATE sync_runs SET stop_reason = 'finished' WHERE finished_at IS NOT NULL")
+        if sync_columns and "pid" not in sync_columns:
+            conn.execute("ALTER TABLE sync_runs ADD COLUMN pid INTEGER")
+        if sync_columns and "cancel_requested" not in sync_columns:
+            conn.execute("ALTER TABLE sync_runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS pipeline_events (
@@ -145,6 +164,121 @@ class SQLiteStore:
             (self.persona_id, source_url),
         ).fetchone()
 
+    def get_source_by_id(self, source_id: int) -> sqlite3.Row | None:
+        return self.connect().execute(
+            "SELECT * FROM sources WHERE id = ? AND persona_id = ?",
+            (source_id, self.persona_id),
+        ).fetchone()
+
+    def delete_source(self, source_id: int) -> list[int]:
+        conn = self.connect()
+        row = conn.execute(
+            "SELECT id FROM sources WHERE id = ? AND persona_id = ?",
+            (source_id, self.persona_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Unknown source: {source_id}")
+        unit_rows = conn.execute(
+            "SELECT id FROM knowledge_units WHERE source_id = ?",
+            (source_id,),
+        ).fetchall()
+        unit_ids = [int(item["id"]) for item in unit_rows]
+        conn.execute("DELETE FROM sources WHERE id = ? AND persona_id = ?", (source_id, self.persona_id))
+        conn.commit()
+        return unit_ids
+
+    def source_url_is_new(self, source_url: str) -> bool:
+        return self.get_source_by_url(source_url) is None
+
+    def max_source_date_for_channel(self, channel_url: str) -> str | None:
+        row = self.connect().execute(
+            """
+            SELECT MAX(COALESCE(source_date, discovered_at)) AS max_date
+            FROM sources
+            WHERE persona_id = ? AND channel_url = ?
+            """,
+            (self.persona_id, channel_url),
+        ).fetchone()
+        if row is None or row["max_date"] is None:
+            return None
+        return str(row["max_date"])
+
+    def known_source_urls(self, urls: Iterable[str]) -> set[str]:
+        normalized = {normalize_url(url) for url in urls if url}
+        if not normalized:
+            return set()
+        placeholders = ",".join("?" for _ in normalized)
+        rows = self.connect().execute(
+            f"""
+            SELECT source_url FROM sources
+            WHERE persona_id = ? AND source_url IN ({placeholders})
+            """,
+            (self.persona_id, *sorted(normalized)),
+        ).fetchall()
+        return {str(row["source_url"]) for row in rows}
+
+    def max_source_date_for_platform(self, platform: str) -> str | None:
+        clause, params = platform_sql_filter(platform)
+        row = self.connect().execute(
+            f"""
+            SELECT MAX(COALESCE(source_date, discovered_at)) AS max_date
+            FROM sources
+            WHERE persona_id = ?{clause}
+            """,
+            (self.persona_id, *params),
+        ).fetchone()
+        if row is None or row["max_date"] is None:
+            return None
+        return str(row["max_date"])
+
+    def min_source_date_for_channel(self, channel_url: str) -> str | None:
+        row = self.connect().execute(
+            """
+            SELECT MIN(COALESCE(source_date, discovered_at)) AS min_date
+            FROM sources
+            WHERE persona_id = ? AND channel_url = ?
+            """,
+            (self.persona_id, channel_url),
+        ).fetchone()
+        if row is None or row["min_date"] is None:
+            return None
+        return str(row["min_date"])
+
+    def min_source_date_for_platform(self, platform: str) -> str | None:
+        clause, params = platform_sql_filter(platform)
+        row = self.connect().execute(
+            f"""
+            SELECT MIN(COALESCE(source_date, discovered_at)) AS min_date
+            FROM sources
+            WHERE persona_id = ?{clause}
+            """,
+            (self.persona_id, *params),
+        ).fetchone()
+        if row is None or row["min_date"] is None:
+            return None
+        return str(row["min_date"])
+
+    def list_source_urls_for_platform(self, platform: str) -> set[str]:
+        clause, params = platform_sql_filter(platform)
+        rows = self.connect().execute(
+            f"""
+            SELECT source_url FROM sources
+            WHERE persona_id = ?{clause}
+            """,
+            (self.persona_id, *params),
+        ).fetchall()
+        return {str(row["source_url"]) for row in rows}
+
+    def list_source_urls_for_channel(self, channel_url: str) -> set[str]:
+        rows = self.connect().execute(
+            """
+            SELECT source_url FROM sources
+            WHERE persona_id = ? AND channel_url = ?
+            """,
+            (self.persona_id, channel_url),
+        ).fetchall()
+        return {str(row["source_url"]) for row in rows}
+
     def list_sources(self, status: str | None = None, limit: int | None = None) -> list[sqlite3.Row]:
         query = "SELECT * FROM sources WHERE persona_id = ?"
         params: list[object] = [self.persona_id]
@@ -192,6 +326,30 @@ class SQLiteStore:
                 source_date DESC,
                 id ASC
         """
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        return list(self.connect().execute(query, params).fetchall())
+
+    def list_sources_by_ids(self, source_ids: list[int], *, limit: int | None = None) -> list[sqlite3.Row]:
+        if not source_ids:
+            return []
+        placeholders = ",".join("?" for _ in source_ids)
+        query = f"""
+            SELECT * FROM sources
+            WHERE persona_id = ?
+              AND id IN ({placeholders})
+            ORDER BY
+                CASE source_type
+                    WHEN 'youtube' THEN 1
+                    WHEN 'podcast' THEN 2
+                    ELSE 3
+                END,
+                source_date IS NULL,
+                source_date DESC,
+                id ASC
+        """
+        params: list[object] = [self.persona_id, *source_ids]
         if limit is not None:
             query += " LIMIT ?"
             params.append(limit)
@@ -344,12 +502,167 @@ class SQLiteStore:
         return result
 
     def start_sync_run(self) -> int:
+        from memory_builder.telemetry.run_watchdog import close_stale_runs_for_persona
+
+        close_stale_runs_for_persona(self, self.persona_id)
         cursor = self.connect().execute(
-            "INSERT INTO sync_runs (persona_id) VALUES (?)",
+            """
+            INSERT INTO sync_runs (persona_id, last_activity_at)
+            VALUES (?, datetime('now'))
+            """,
             (self.persona_id,),
         )
         self.connect().commit()
         return int(cursor.lastrowid)
+
+    def set_run_pid(self, run_id: int, pid: int) -> None:
+        self.connect().execute(
+            "UPDATE sync_runs SET pid = ? WHERE id = ? AND finished_at IS NULL",
+            (pid, run_id),
+        )
+        self.connect().commit()
+
+    def get_run_pid(self, run_id: int) -> int | None:
+        row = self.connect().execute(
+            "SELECT pid FROM sync_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None or row["pid"] is None:
+            return None
+        return int(row["pid"])
+
+    def request_run_cancel(self, run_id: int) -> bool:
+        updated = self.connect().execute(
+            """
+            UPDATE sync_runs
+            SET cancel_requested = 1
+            WHERE id = ? AND finished_at IS NULL
+            """,
+            (run_id,),
+        )
+        self.connect().commit()
+        return updated.rowcount > 0
+
+    def is_run_cancel_requested(self, run_id: int) -> bool:
+        row = self.connect().execute(
+            "SELECT cancel_requested FROM sync_runs WHERE id = ? AND finished_at IS NULL",
+            (run_id,),
+        ).fetchone()
+        return row is not None and bool(row["cancel_requested"])
+
+    def touch_run_activity(self, run_id: int) -> None:
+        # Heartbeat runs on a background thread; use a short-lived connection instead of self._conn.
+        conn = sqlite3.connect(self.path, check_same_thread=False)
+        try:
+            conn.execute(
+                """
+                UPDATE sync_runs
+                SET last_activity_at = datetime('now')
+                WHERE id = ? AND finished_at IS NULL
+                """,
+                (run_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def mark_run_stopped(
+        self,
+        run_id: int,
+        *,
+        reason: str,
+        event_stage: str = "run_interrupted",
+        message: str | None = None,
+        summary: dict[str, int | str] | None = None,
+    ) -> bool:
+        row = self.connect().execute(
+            """
+            SELECT finished_at, last_activity_at, started_at, persona_id
+            FROM sync_runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        if row is None or row["finished_at"] is not None:
+            return False
+        stopped_at = row["last_activity_at"] or row["started_at"]
+        cost_row = self.connect().execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM api_usage_logs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        run_cost = float(cost_row["total"]) if cost_row else 0.0
+        if summary:
+            self.connect().execute(
+                """
+                UPDATE sync_runs
+                SET sources_discovered = ?,
+                    sources_processed = ?,
+                    units_created = ?,
+                    units_skipped_duplicate = ?,
+                    errors = ?,
+                    summary = ?
+                WHERE id = ? AND finished_at IS NULL
+                """,
+                (
+                    summary.get("sources_discovered", 0),
+                    summary.get("sources_processed", 0),
+                    summary.get("units_created", 0),
+                    summary.get("units_skipped_duplicate", 0),
+                    summary.get("errors", 0),
+                    json_dumps(summary),
+                    run_id,
+                ),
+            )
+        updated = self.connect().execute(
+            """
+            UPDATE sync_runs
+            SET finished_at = ?,
+                stopped_at = ?,
+                stop_reason = ?,
+                cost_usd = ?,
+                last_activity_at = COALESCE(last_activity_at, started_at)
+            WHERE id = ? AND finished_at IS NULL
+            """,
+            (stopped_at, stopped_at, reason, run_cost, run_id),
+        )
+        if updated.rowcount == 0:
+            return False
+        event_message = message or f"Pipeline run {run_id} stopped ({reason})"
+        self.log_pipeline_event(
+            persona_id=str(row["persona_id"]),
+            run_id=run_id,
+            stage=event_stage,
+            message=event_message,
+            metadata={"stop_reason": reason, "stopped_at": stopped_at},
+        )
+        self.connect().commit()
+        return True
+
+    def mark_run_interrupted(self, run_id: int, *, reason: str = STOP_REASON_INTERRUPTED) -> bool:
+        return self.mark_run_stopped(
+            run_id,
+            reason=reason,
+            event_stage="run_interrupted",
+            message=f"Pipeline run {run_id} stopped without finishing",
+        )
+
+    def is_run_open(self, run_id: int) -> bool:
+        row = self.connect().execute(
+            "SELECT finished_at FROM sync_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        return row is not None and row["finished_at"] is None
+
+    def update_sync_run_discovered(self, run_id: int, sources_discovered: int) -> None:
+        self.connect().execute(
+            """
+            UPDATE sync_runs
+            SET sources_discovered = ?, last_activity_at = datetime('now')
+            WHERE id = ?
+            """,
+            (sources_discovered, run_id),
+        )
+        self.connect().commit()
 
     def finish_sync_run(self, run_id: int, summary: dict[str, int | str]) -> None:
         cost_row = self.connect().execute(
@@ -361,6 +674,9 @@ class SQLiteStore:
             """
             UPDATE sync_runs SET
                 finished_at = datetime('now'),
+                stopped_at = datetime('now'),
+                stop_reason = 'finished',
+                last_activity_at = datetime('now'),
                 sources_discovered = ?,
                 sources_processed = ?,
                 units_created = ?,
@@ -400,6 +716,15 @@ class SQLiteStore:
             """,
             (persona_id, run_id, source_id, stage, message, json_dumps(metadata or {})),
         )
+        if run_id is not None:
+            self.connect().execute(
+                """
+                UPDATE sync_runs
+                SET last_activity_at = datetime('now')
+                WHERE id = ? AND finished_at IS NULL
+                """,
+                (run_id,),
+            )
         self.connect().commit()
         return int(cursor.lastrowid)
 

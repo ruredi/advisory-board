@@ -4,10 +4,13 @@ import Image from "next/image";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { AdvisorChannelsPanel } from "@/components/channels/channels-page";
 import { PageHeader } from "@/components/shared/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   createAdvisorConfigFile,
   deploySoul,
@@ -20,8 +23,7 @@ import {
   uploadAdvisorPhoto,
 } from "@/lib/api/client";
 import type { AdvisorConfigFileItem } from "@/lib/api/types";
-
-type AdvisorTab = "profile" | "config-files";
+import type { AdvisorTab } from "@/lib/advisor-tabs";
 
 function advisorInitials(name: string) {
   return name
@@ -70,7 +72,7 @@ function AdvisorPhoto({
         <span className="absolute inset-x-0 bottom-0 bg-black/60 px-2 py-1 text-center text-[11px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
           Fotó feltöltése
         </span>
-        <input
+        <Input
           type="file"
           accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
           className="sr-only"
@@ -121,10 +123,10 @@ function AdvisorConfigFileEditor({
           Mentés
         </Button>
       </div>
-      <textarea
+      <Textarea
         value={content}
         onChange={(event) => setContent(event.target.value)}
-        className="min-h-[32rem] w-full rounded-md border bg-background p-3 font-mono text-xs"
+        className="min-h-[32rem] font-mono text-xs"
         aria-label={`${file.label} szerkesztése`}
       />
       {saveMutation.isError ? (
@@ -171,18 +173,17 @@ function AdvisorConfigFilesPanel({ advisorId }: { advisorId: string }) {
             <p className="text-sm text-muted-foreground">Config fájlok betöltése...</p>
           ) : null}
           {files.map((file) => (
-            <button
+            <Button
               key={file.key}
               type="button"
+              variant={selectedKey === file.key ? "default" : "outline"}
               onClick={() => setSelectedFileKey(file.key)}
-              className={`w-full rounded-md border px-3 py-2 text-left text-sm transition-colors ${
-                selectedKey === file.key ? "bg-primary text-primary-foreground" : "hover:bg-muted"
-              }`}
+              className="h-auto w-full flex-col items-start gap-0.5 px-3 py-2 text-left"
             >
               <span className="block font-medium">{file.label}</span>
-              <span className="block truncate text-xs opacity-75">{file.path}</span>
+              <span className="block w-full truncate text-xs opacity-75">{file.path}</span>
               {!file.exists ? <span className="mt-1 block text-xs opacity-75">Még nincs létrehozva</span> : null}
-            </button>
+            </Button>
           ))}
         </CardContent>
       </Card>
@@ -233,9 +234,9 @@ function AdvisorConfigFilesPanel({ advisorId }: { advisorId: string }) {
   );
 }
 
-export function AdvisorsPageClient() {
+export function AdvisorsPageClient({ initialTab = "profile" }: { initialTab?: AdvisorTab }) {
   const [advisorId, setAdvisorId] = useState("jobs");
-  const [activeTab, setActiveTab] = useState<AdvisorTab>("profile");
+  const [activeTab, setActiveTab] = useState<AdvisorTab>(initialTab);
 
   const advisorsQuery = useQuery({ queryKey: ["advisors"], queryFn: fetchAdvisors });
   const advisorQuery = useQuery({
@@ -335,6 +336,13 @@ export function AdvisorsPageClient() {
         >
           Config fájlok
         </Button>
+        <Button
+          variant={activeTab === "channels" ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setActiveTab("channels")}
+        >
+          Forrás csatornák
+        </Button>
       </div>
 
       {activeTab === "profile" ? (
@@ -380,6 +388,16 @@ export function AdvisorsPageClient() {
             profil, source/memória YAML, jóváhagyott profilok és csatorna registry.
           </p>
           <AdvisorConfigFilesPanel key={advisorId} advisorId={advisorId} />
+        </div>
+      ) : null}
+
+      {activeTab === "channels" ? (
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {selectedAdvisorName} social profiljai, YouTube csatornái, podcast és web forrásai —
+            discovery és scraping innen indul.
+          </p>
+          <AdvisorChannelsPanel key={advisorId} personaId={advisorId} />
         </div>
       ) : null}
     </div>

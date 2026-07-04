@@ -2,39 +2,45 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { Badge } from "@/components/ui/badge";
+import { MetricCard } from "@/components/shared/metric-card";
+import { RunStatusBadge } from "@/components/shared/run-status-badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchRun, fetchRunEvents } from "@/lib/api/client";
+import { fetchRun, fetchRunEvents, stopRun } from "@/lib/api/client";
 import { formatDateTime, formatUsd } from "@/lib/format";
 import { useElapsedDuration } from "@/lib/hooks/use-elapsed-duration";
+import { runStatusLabel } from "@/lib/run-status";
 
-function RunDuration({
+function RunDurationValue({
   startedAt,
-  finishedAt,
+  stoppedAt,
   status,
+  activeDurationSeconds,
 }: {
   startedAt: string;
-  finishedAt: string | null;
+  stoppedAt: string | null;
   status: string;
+  activeDurationSeconds: number;
 }) {
-  const isRunning = status === "running" && finishedAt === null;
-  const duration = useElapsedDuration(startedAt, finishedAt, isRunning);
-
+  const isRunning = status === "running";
   return (
-    <Card size="sm">
-      <CardContent>
-        <p className="text-xs text-muted-foreground">Futásidő</p>
-        <p className="font-semibold tabular-nums">{duration}</p>
-      </CardContent>
-    </Card>
+    <>
+      {useElapsedDuration(
+        startedAt,
+        stoppedAt,
+        isRunning,
+        isRunning ? undefined : activeDurationSeconds
+      )}
+    </>
   );
 }
 
 export function RunDetailClient({ runId }: { runId: number }) {
   const searchParams = useSearchParams();
   const personaId = searchParams.get("persona") ?? "hormozi";
+  const queryClient = useQueryClient();
 
   const runQuery = useQuery({
     queryKey: ["run", personaId, runId],
@@ -49,26 +55,79 @@ export function RunDetailClient({ runId }: { runId: number }) {
     enabled: Boolean(personaId),
   });
 
+  const stopRunMutation = useMutation({
+    mutationFn: () => stopRun(personaId, runId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["run", personaId, runId] });
+      queryClient.invalidateQueries({ queryKey: ["runs", personaId] });
+      queryClient.invalidateQueries({ queryKey: ["run-events", personaId, runId] });
+    },
+  });
+
   const run = runQuery.data;
   const events = eventsQuery.data ?? [];
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link href="/runs" className="text-sm text-muted-foreground underline">
-          ← Futások
-        </Link>
-        <h1 className="font-heading mt-2 text-2xl font-semibold">Run #{runId}</h1>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Link href="/runs" className="text-sm text-muted-foreground underline">
+            ← Futások
+          </Link>
+          <h1 className="font-heading mt-2 text-2xl font-semibold">Run #{runId}</h1>
+        </div>
+        {run?.status === "running" ? (
+          <Button
+            variant="destructive"
+            onClick={() => stopRunMutation.mutate()}
+            disabled={stopRunMutation.isPending}
+          >
+            {stopRunMutation.isPending ? "Leállítás…" : "Leállítás"}
+          </Button>
+        ) : null}
       </div>
 
       {run ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <Card size="sm"><CardContent><p className="text-xs text-muted-foreground">Státusz</p><Badge>{run.status}</Badge></CardContent></Card>
-          <Card size="sm"><CardContent><p className="text-xs text-muted-foreground">Költség</p><p className="font-semibold tabular-nums">{formatUsd(run.cost_run_usd)}</p></CardContent></Card>
-          <Card size="sm"><CardContent><p className="text-xs text-muted-foreground">Done / Error / Skip</p><p>{run.done_count} / {run.error_count} / {run.skip_count}</p></CardContent></Card>
-          <RunDuration startedAt={run.started_at} finishedAt={run.finished_at} status={run.status} />
-          <Card size="sm"><CardContent><p className="text-xs text-muted-foreground">Indítva</p><p>{formatDateTime(run.started_at)}</p></CardContent></Card>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+          <Card size="sm">
+            <CardContent>
+              <p className="text-xs text-muted-foreground">Státusz</p>
+              <RunStatusBadge status={run.status} />
+            </CardContent>
+          </Card>
+          <MetricCard label="Mód" value={run.run_mode} />
+          <MetricCard label="Talált forrás" value={run.sources_discovered} />
+          <MetricCard label="Feldolgozva" value={run.sources_processed} />
+          <MetricCard label="Költség" value={formatUsd(run.cost_run_usd)} />
+          <MetricCard
+            label="Skip / Hiba"
+            value={`${run.skip_count} / ${run.error_count}`}
+          />
+          <MetricCard
+            label="Nettó futásidő"
+            value={
+              <RunDurationValue
+                startedAt={run.started_at}
+                stoppedAt={run.stopped_at}
+                status={run.status}
+                activeDurationSeconds={run.active_duration_seconds}
+              />
+            }
+          />
+          <MetricCard label="Indítva" value={formatDateTime(run.started_at)} />
+          <MetricCard
+            label="Befejezés"
+            value={run.stopped_at ? formatDateTime(run.stopped_at) : "—"}
+          />
         </div>
+      ) : null}
+
+      {run?.stop_reason && run.status !== "running" ? (
+        <p className="text-sm text-muted-foreground">
+          Leállás oka: {runStatusLabel(run.status)}
+          {run.stop_reason === "fatal_error" ? " — ismétlődő infrastruktúra-hiba miatt automatikusan leállt" : null}
+          {run.stop_reason === "interrupted" ? " — manuálisan vagy külső megszakítás miatt" : null}
+        </p>
       ) : null}
 
       {run?.current_title ? (
@@ -86,7 +145,14 @@ export function RunDetailClient({ runId }: { runId: number }) {
         <CardHeader><CardTitle>Eseményfolyam</CardTitle></CardHeader>
         <CardContent className="max-h-[32rem] space-y-2 overflow-y-auto font-mono text-xs">
           {events.map((event) => (
-            <div key={event.id} className={event.stage === "source_error" ? "text-destructive" : ""}>
+            <div
+              key={event.id}
+              className={
+                event.stage === "source_error" || event.stage === "run_aborted"
+                  ? "text-destructive"
+                  : ""
+              }
+            >
               <span className="text-muted-foreground">{formatDateTime(event.created_at)}</span>{" "}
               <span className="font-semibold">{event.stage}</span> {event.message}
             </div>

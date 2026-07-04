@@ -21,6 +21,8 @@ class SourceCandidate:
     username: str = ""
     signals: list[str] = field(default_factory=list)
     status: str = "pending"  # pending | approved | rejected | manual
+    label: str = ""
+    archived: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -35,6 +37,8 @@ class SourceCandidate:
             username=data.get("username", ""),
             signals=list(data.get("signals", [])),
             status=data.get("status", "pending"),
+            label=data.get("label", ""),
+            archived=bool(data.get("archived", False)),
         )
 
 
@@ -120,7 +124,9 @@ def load_approved(persona_id: str, root: Path | None = None) -> ApprovedSources 
 
 def is_sources_approved(persona_id: str, root: Path | None = None) -> bool:
     approved = load_approved(persona_id, root)
-    return approved is not None and len(approved.sources) > 0
+    if approved is None:
+        return False
+    return any(not source.archived for source in approved.sources)
 
 
 def username_from_url(url: str) -> str:
@@ -143,6 +149,8 @@ def approved_to_social_profiles(approved: ApprovedSources) -> list[dict[str, str
     social_platforms = scraper_platforms | {"linkedin"}
     profiles: list[dict[str, str | int]] = []
     for source in approved.sources:
+        if source.archived:
+            continue
         platform = source.platform.lower()
         if platform == "twitter":
             platform = "x"

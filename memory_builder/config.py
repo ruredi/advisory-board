@@ -30,6 +30,8 @@ def load_persona_config(persona_id: str, root: Path | None = None) -> PersonaCon
         vision_model=data.get("vision_model", "gemini-2.5-flash"),
         vector_store=data.get("vector_store", "qdrant"),
         qdrant_url=data.get("qdrant_url") or None,
+        speaker_labeled_transcription=bool(data.get("speaker_labeled_transcription", False)),
+        allow_unlabeled_fallback=bool(data.get("allow_unlabeled_fallback", False)),
     )
 
 
@@ -65,4 +67,6 @@ def persona_config_to_dict(config: PersonaConfig) -> dict:
         "vision_model": config.vision_model,
         "vector_store": config.vector_store,
         "qdrant_url": config.qdrant_url or "",
+        "speaker_labeled_transcription": config.speaker_labeled_transcription,
+        "allow_unlabeled_fallback": config.allow_unlabeled_fallback,
     }

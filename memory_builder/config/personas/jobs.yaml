@@ -1,0 +1,29 @@
+persona_id: jobs
+display_name: Steve Jobs
+
+seed_link_files:
+  - docs/notebooklm-forrasok/steve-jobs/steve-jobs-linkek.txt
+
+speaker_names:
+  - Steve Jobs
+
+allowed_domains:
+  - apple.com
+  - stevejobsarchive.com
+  - youtube.com
+  - youtu.be
+
+watch_feeds:
+  - type: web
+    url: https://stevejobsarchive.com/
+    label: Steve Jobs Archive
+
+social_profiles: []
+
+min_confidence: weak
+embedding_model: text-embedding-3-small
+extraction_model: gemini-2.5-flash
+transcription_model: gemini-2.5-flash
+vision_model: gemini-2.5-flash
+vector_store: qdrant
+qdrant_url: ""

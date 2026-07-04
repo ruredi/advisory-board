@@ -14,6 +14,8 @@ sources:
   - seed_file
   - watch_feed
   status: approved
+  label: ''
+  archived: false
 - url: https://x.com/alexhormozi
   platform: x
   confidence: 0.96
@@ -24,6 +26,8 @@ sources:
   - platform:x
   - seed_file
   status: approved
+  label: ''
+  archived: false
 - url: https://facebook.com/ahormozi
   platform: facebook
   confidence: 0.9
@@ -34,6 +38,8 @@ sources:
   - platform:facebook
   - facebook_profile
   status: approved
+  label: ''
+  archived: false
 - url: https://instagram.com/hormozi
   platform: instagram
   confidence: 0.9
@@ -43,6 +49,8 @@ sources:
   - seed_file
   - platform:instagram
   status: approved
+  label: ''
+  archived: false
 - url: https://linkedin.com/in/alexhormozi
   platform: linkedin
   confidence: 0.9
@@ -52,3 +60,15 @@ sources:
   - seed_file
   - platform:linkedin
   status: approved
+  label: ''
+  archived: false
+- url: https://open.spotify.com/show/6YNopzKDGDwf0auIpPTIID
+  platform: spotify
+  confidence: 1.0
+  discovery_source: channel_registry
+  username: show
+  signals:
+  - channel_registry
+  status: approved
+  label: https://open.spotify.com/show/6YNopzKDGDwf0auIpPTIID
+  archived: false

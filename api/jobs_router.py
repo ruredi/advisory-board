@@ -49,6 +49,10 @@ def create_job(body: JobCreateRequest) -> JobItem:
         args.append("--skip-discovery")
     if body.dry_run:
         args.append("--dry-run")
+    if body.discover_only:
+        args.append("--discover-only")
+    if body.discovery_limit is not None:
+        args.extend(["--discovery-limit", str(body.discovery_limit)])
     record = job_manager.start(persona_id=body.persona_id, script=script, args=args)
     return _job_item(record)
 

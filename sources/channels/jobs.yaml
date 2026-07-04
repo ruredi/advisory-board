@@ -1,0 +1,12 @@
+persona_id: jobs
+channels:
+- channel_id: web-site-stevejobsarchive-com
+  type: web_site
+  url: https://stevejobsarchive.com/
+  label: Steve Jobs Archive
+  priority: 15
+  rss_url: null
+  apple_podcast_id: null
+  latest_published_at: null
+  last_discovered_at: null
+  added_at: '2026-07-03T18:23:41.618084+00:00'

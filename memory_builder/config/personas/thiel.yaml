@@ -1,0 +1,27 @@
+persona_id: thiel
+display_name: Peter Thiel
+
+seed_link_files:
+  - docs/notebooklm-forrasok/peter-thiel/peter-thiel-linkek.txt
+
+speaker_names:
+  - Peter Thiel
+
+allowed_domains:
+  - foundersfund.com
+  - x.com
+  - twitter.com
+
+watch_feeds: []
+
+social_profiles:
+  - platform: x
+    username: peterthiel
+
+min_confidence: weak
+embedding_model: text-embedding-3-small
+extraction_model: gemini-2.5-flash
+transcription_model: gemini-2.5-flash
+vision_model: gemini-2.5-flash
+vector_store: qdrant
+qdrant_url: ""

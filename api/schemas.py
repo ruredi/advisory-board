@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -13,6 +15,11 @@ class CostSummary(BaseModel):
     today_calls: int
     total_usd: float
     total_calls: int
+    today_api_usd: float = 0
+    today_api_calls: int = 0
+    today_scrapfly_usd: float = 0
+    today_scrapfly_calls: int = 0
+    today_scrapfly_credits: float = 0
 
 
 class RunSummary(BaseModel):
@@ -58,6 +65,10 @@ class SyncRunDetail(BaseModel):
     persona_id: str
     started_at: str
     finished_at: str | None
+    stopped_at: str | None = None
+    stop_reason: str | None = None
+    last_activity_at: str | None = None
+    active_duration_seconds: int = 0
     sources_discovered: int
     sources_processed: int
     units_created: int
@@ -70,6 +81,7 @@ class SyncRunDetail(BaseModel):
     error_count: int = 0
     skip_count: int = 0
     api_calls: int = 0
+    run_mode: str = "—"
 
 
 class RunProgressResponse(BaseModel):
@@ -77,11 +89,17 @@ class RunProgressResponse(BaseModel):
     persona_id: str
     started_at: str
     finished_at: str | None
+    stopped_at: str | None = None
+    stop_reason: str | None = None
+    last_activity_at: str | None = None
+    active_duration_seconds: int = 0
     status: str
     latest_stage: str
     latest_message: str
     events_count: int
     sources_processed: int
+    sources_discovered: int = 0
+    run_mode: str = "—"
     cost_run_usd: float
     cost_persona_usd: float
     cost_today_usd: float
@@ -107,6 +125,7 @@ class PipelineEvent(BaseModel):
 
 class SourceItem(BaseModel):
     id: int
+    persona_id: str
     source_title: str | None
     source_url: str
     source_type: str
@@ -123,10 +142,126 @@ class SourceDetail(SourceItem):
     raw_path: str | None
     unit_count: int = 0
     processed_text: str | None = None
+    transcript_status: str = "unlabeled"
+    transcript_variants: list["TranscriptVariantItem"] = Field(default_factory=list)
+
+
+class TranscriptVariantItem(BaseModel):
+    key: str
+    label: str
+    available: bool
+    char_count: int = 0
+
+
+class TranscriptTextResponse(BaseModel):
+    source_id: int
+    variant: str
+    label: str
+    text: str
+    char_count: int
+
+
+class TranscriptSegmentItem(BaseModel):
+    segment_id: str
+    speaker: str
+    speaker_type: str
+    text: str
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+    confidence: str = "medium"
+
+
+class TranscriptSegmentsResponse(BaseModel):
+    source_id: int
+    display_name: str = ""
+    transcription_mode: str = "diarized"
+    segments: list[TranscriptSegmentItem]
+
+
+class QuoteItem(BaseModel):
+    unit_id: int
+    source_id: int
+    text: str
+    speaker: str | None = None
+    source_title: str | None = None
+    source_url: str | None = None
+    source_link: str | None = None
+    segment_id: str | None = None
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+    is_verbatim: bool = True
+    content_type: str = "quote"
+    confidence: str = "medium"
+
+
+class SourceWithMemoryItem(SourceItem):
+    unit_count: int = 0
+    strong_count: int = 0
+    medium_count: int = 0
+    weak_count: int = 0
+    duplicate_count: int = 0
+    content_type_counts: dict[str, int] = Field(default_factory=dict)
+    latest_unit_preview: str | None = None
+    latest_event_stage: str | None = None
+    latest_event_message: str | None = None
+    latest_event_at: str | None = None
+    needs_attention: bool = False
 
 
 class SourcePatchRequest(BaseModel):
     status: str | None = None
+
+
+class SourceLinkAnalyzeRequest(BaseModel):
+    url: str
+    persona_id: str | None = None
+
+
+class SourceLinkPersonaMatch(BaseModel):
+    persona_id: str
+    display_name: str
+    confidence: float
+    signals: list[str] = Field(default_factory=list)
+    selected: bool = False
+
+
+class SourceLinkAnalyzeResponse(BaseModel):
+    url: str
+    normalized_url: str
+    kind: str
+    source_type: str
+    platform: str
+    title: str
+    channel_url: str | None = None
+    processable: bool
+    message: str = ""
+    matched_personas: list[SourceLinkPersonaMatch] = Field(default_factory=list)
+
+
+class SourceLinkSubmitRequest(BaseModel):
+    url: str
+    persona_ids: list[str] = Field(default_factory=list)
+    process: bool = True
+    persona_id: str | None = None
+
+
+class SourceLinkSubmitPersonaResult(BaseModel):
+    persona_id: str
+    source_id: int | None = None
+    channel_id: str | None = None
+    status: str
+    job_id: str | None = None
+    message: str = ""
+
+
+class SourceLinkSubmitResponse(BaseModel):
+    url: str
+    normalized_url: str
+    kind: str
+    source_type: str
+    platform: str
+    title: str
+    results: list[SourceLinkSubmitPersonaResult] = Field(default_factory=list)
 
 
 class SourcePlatformStat(BaseModel):
@@ -143,6 +278,7 @@ class SourceStatsResponse(BaseModel):
 
 class KnowledgeUnitItem(BaseModel):
     id: int
+    persona_id: str
     source_id: int
     content_type: str
     chunk_text: str
@@ -153,6 +289,22 @@ class KnowledgeUnitItem(BaseModel):
     source_url: str | None = None
     source_type: str = ""
     channel_url: str | None = None
+    frameworks: list[str] = Field(default_factory=list)
+    processes: list[str] = Field(default_factory=list)
+    steps: list[str] = Field(default_factory=list)
+    quotes: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_type: str = "source_supported"
+    retrieval_priority: int = 50
+
+
+class KnowledgeUnitDetail(KnowledgeUnitItem):
+    visual_description: str = ""
+    topics: list[str] = Field(default_factory=list)
+    concepts: list[str] = Field(default_factory=list)
+    advice_contexts: list[str] = Field(default_factory=list)
+    examples: list[str] = Field(default_factory=list)
+    speaker: str | None = None
+    source_nature: str = ""
 
 
 class UnitStats(BaseModel):
@@ -180,6 +332,9 @@ class SearchHit(BaseModel):
     frameworks: list[str]
     processes: list[str]
     steps: list[str]
+    quotes: list[dict[str, Any]] = Field(default_factory=list)
+    retrieval_priority: int = 50
+    is_new_information: bool = True
 
 
 class SearchRequest(BaseModel):
@@ -244,6 +399,42 @@ class CostBreakdownItem(BaseModel):
     call_count: int
 
 
+class ScrapflySubscription(BaseModel):
+    plan_name: str
+    period_start: str
+    period_end: str
+    credits_used: int
+    credits_limit: int
+    credits_remaining: int
+    plan_price_usd: float
+    usage_usd: float
+    usd_per_credit: float
+    quota_reached: bool
+    concurrent_usage: int
+    concurrent_limit: int
+    project_name: str
+
+
+class ScrapflyDailyUsage(BaseModel):
+    day: str
+    cost_usd: float
+    api_credits: float
+    call_count: int
+
+
+class ScrapflyCostSummary(BaseModel):
+    today_usd: float
+    today_credits: float
+    today_calls: int
+    today_cost_per_scrape: float | None = None
+    total_usd: float
+    total_credits: float
+    total_calls: int
+    total_cost_per_scrape: float | None = None
+    daily: list[ScrapflyDailyUsage] = Field(default_factory=list)
+    by_operation: list[CostBreakdownItem] = Field(default_factory=list)
+
+
 class JobCreateRequest(BaseModel):
     persona_id: str
     kind: str = "build"
@@ -252,6 +443,8 @@ class JobCreateRequest(BaseModel):
     retry_failed: bool = False
     skip_discovery: bool = False
     dry_run: bool = False
+    discover_only: bool = False
+    discovery_limit: int | None = None
 
 
 class JobItem(BaseModel):

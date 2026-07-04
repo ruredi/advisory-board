@@ -1,0 +1,30 @@
+persona_id: musk
+display_name: Elon Musk
+
+seed_link_files:
+  - docs/notebooklm-forrasok/elon-musk/elon-musk-linkek.txt
+
+speaker_names:
+  - Elon Musk
+
+allowed_domains:
+  - tesla.com
+  - spacex.com
+  - x.com
+  - twitter.com
+  - youtube.com
+  - youtu.be
+
+watch_feeds: []
+
+social_profiles:
+  - platform: x
+    username: elonmusk
+
+min_confidence: weak
+embedding_model: text-embedding-3-small
+extraction_model: gemini-2.5-flash
+transcription_model: gemini-2.5-flash
+vision_model: gemini-2.5-flash
+vector_store: qdrant
+qdrant_url: ""

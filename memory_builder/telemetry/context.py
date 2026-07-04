@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
+from memory_builder.pipeline.fatal_errors import PipelineCancelledError, PipelineFatalError
 from memory_builder.storage.sqlite_store import SQLiteStore
 from memory_builder.telemetry.pricing import (
     estimate_gemini_cost_usd,
     estimate_openai_embedding_cost_usd,
     estimate_scrapfly_cost_usd,
 )
+from memory_builder.telemetry.run_watchdog import HEARTBEAT_INTERVAL_SECONDS
 
 
 log = logging.getLogger(__name__)
@@ -25,6 +28,7 @@ class PipelineRunContext:
     persona_id: str
     run_id: int
     store: SQLiteStore
+    run_options: dict[str, Any] = field(default_factory=dict)
     current_source_id: int | None = field(default=None, init=False)
     current_source_url: str = field(default="", init=False)
     current_source_title: str = field(default="", init=False)
@@ -205,9 +209,35 @@ def get_run_context() -> PipelineRunContext | None:
 @contextmanager
 def run_context(ctx: PipelineRunContext) -> Iterator[PipelineRunContext]:
     token = _current_run.set(ctx)
+    stop_heartbeat = threading.Event()
+
+    def heartbeat_loop() -> None:
+        while not stop_heartbeat.wait(timeout=HEARTBEAT_INTERVAL_SECONDS):
+            try:
+                ctx.store.touch_run_activity(ctx.run_id)
+            except Exception:
+                log.exception("Run heartbeat failed for run=%s", ctx.run_id)
+
+    heartbeat_thread = threading.Thread(
+        target=heartbeat_loop,
+        name=f"run-heartbeat-{ctx.run_id}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
     try:
-        ctx.event("run_started", f"Pipeline run {ctx.run_id} started")
+        ctx.event(
+            "run_started",
+            f"Pipeline run {ctx.run_id} started",
+            metadata=ctx.run_options,
+        )
         yield ctx
         ctx.event("run_finished", f"Pipeline run {ctx.run_id} finished")
+    except (PipelineFatalError, PipelineCancelledError):
+        raise
+    except BaseException:
+        ctx.store.mark_run_interrupted(ctx.run_id)
+        raise
     finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=1)
         _current_run.reset(token)

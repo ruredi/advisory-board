@@ -86,10 +86,16 @@ def main() -> int:
         action="store_true",
         help="Download MP3 only; skip Gemini transcription",
     )
+    parser.add_argument(
+        "--diarized",
+        action="store_true",
+        help="Use persona speaker_labeled_transcription config for diarized Gemini output",
+    )
     args = parser.parse_args()
 
     config = load_persona_config(args.persona)
     model = args.model or config.transcription_model
+    use_diarized = args.diarized or config.speaker_labeled_transcription
 
     if args.url:
         mp3_url, title = args.url, args.title or args.url
@@ -118,9 +124,19 @@ def main() -> int:
         print(f"Preview: {preview}...")
         return 0
 
-    doc = process_podcast(args.persona, mp3_url, title=title, transcription_model=model)
+    doc = process_podcast(
+        args.persona,
+        mp3_url,
+        title=title,
+        transcription_model=model,
+        display_name=config.display_name,
+        speaker_names=config.speaker_names,
+        speaker_labeled_transcription=use_diarized,
+    )
     preview = doc.text.replace("\n", " ")[:200]
-    print(f"OK  transcript chars={len(doc.text)}")
+    print(f"OK  transcript chars={len(doc.text)} mode={doc.metadata.get('transcription_mode', 'unknown')}")
+    if doc.metadata.get("segment_count") is not None:
+        print(f"segments={doc.metadata.get('segment_count')} target={doc.metadata.get('target_segment_count')}")
     print(f"Preview: {preview}...")
     return 0
 

@@ -7,11 +7,13 @@ export function PageHeader({
   description,
   personaId,
   onPersonaChange,
+  personaAllowAll = true,
 }: {
   title: string;
   description?: string;
   personaId?: string;
   onPersonaChange?: (id: string) => void;
+  personaAllowAll?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -20,7 +22,7 @@ export function PageHeader({
         {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
       </div>
       {personaId && onPersonaChange ? (
-        <PersonaSelect value={personaId} onChange={onPersonaChange} />
+        <PersonaSelect value={personaId} onChange={onPersonaChange} allowAll={personaAllowAll} />
       ) : null}
     </div>
   );

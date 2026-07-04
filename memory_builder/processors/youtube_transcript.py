@@ -6,9 +6,10 @@ import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from memory_builder.fetch.downloader import save_json_metadata, save_raw_bytes, source_slug
+from memory_builder.fetch.downloader import save_json_metadata, source_slug
 from memory_builder.models import ProcessedDocument, SourceNature
-from memory_builder.paths import sources_processed_dir, sources_raw_dir
+from memory_builder.paths import project_root, sources_processed_dir, sources_raw_dir
+from memory_builder.processors.transcript_pipeline import build_diarized_document_text
 
 
 def youtube_video_id(url: str) -> str | None:
@@ -24,9 +25,17 @@ def youtube_video_id(url: str) -> str | None:
     return None
 
 
-def process_youtube(persona_id: str, source_url: str, root: Path | None = None) -> ProcessedDocument:
-    from memory_builder.paths import project_root
-
+def process_youtube(
+    persona_id: str,
+    source_url: str,
+    root: Path | None = None,
+    *,
+    transcription_model: str = "gemini-2.5-flash",
+    display_name: str = "",
+    speaker_names: list[str] | None = None,
+    speaker_labeled_transcription: bool = False,
+    allow_unlabeled_fallback: bool = False,
+) -> ProcessedDocument:
     base_root = root or project_root()
     video_id = youtube_video_id(source_url)
     if not video_id:
@@ -46,29 +55,94 @@ def process_youtube(persona_id: str, source_url: str, root: Path | None = None) 
         title = info.get("title", title)
         upload_date = info.get("upload_date")
 
-    transcript = _fetch_youtube_transcript(video_id)
     raw_dir = sources_raw_dir(persona_id, base_root) / source_slug(source_url)
     raw_dir.mkdir(parents=True, exist_ok=True)
-    transcript_path = raw_dir / "transcript.txt"
-    transcript_path.write_text(transcript, encoding="utf-8")
-    save_json_metadata(
-        persona_id,
-        source_url,
-        {"title": title, "video_id": video_id, "upload_date": upload_date},
-        base_root,
-    )
-
     processed_dir = sources_processed_dir(persona_id, base_root) / source_slug(source_url)
     processed_dir.mkdir(parents=True, exist_ok=True)
-    (processed_dir / "document.txt").write_text(transcript, encoding="utf-8")
 
-    nature = SourceNature.PERFORMED_SPOKEN if any(token in title.lower() for token in ("keynote", "speech")) else SourceNature.NATURAL_SPOKEN
+    metadata = {
+        "title": title,
+        "video_id": video_id,
+        "upload_date": upload_date,
+        "source_url": source_url,
+        "display_name": display_name,
+        "speaker_names": speaker_names or [],
+    }
+
+    if speaker_labeled_transcription and display_name:
+        try:
+            audio_path = _download_youtube_audio(video_id, raw_dir)
+            extraction_input, segments, artifact_paths = build_diarized_document_text(
+                audio_path=audio_path,
+                transcription_model=transcription_model,
+                display_name=display_name,
+                speaker_names=speaker_names or [],
+                processed_dir=processed_dir,
+            )
+            metadata.update(
+                {
+                    "transcription_mode": "diarized",
+                    "audio_path": str(audio_path),
+                    "segment_count": len(segments.segments),
+                    "target_segment_count": sum(
+                        1 for segment in segments.segments if segment.speaker_type == "target"
+                    ),
+                    **{f"path_{key}": value for key, value in artifact_paths.items()},
+                }
+            )
+            transcript = extraction_input
+        except Exception as exc:
+            if not allow_unlabeled_fallback:
+                raise RuntimeError(f"YouTube diarized transcription failed: {exc}") from exc
+            transcript = _fetch_youtube_transcript(video_id)
+            metadata["transcription_mode"] = "fallback_vtt"
+            metadata["diarization_error"] = str(exc)
+            _write_plain_transcript(processed_dir, raw_dir, transcript)
+    else:
+        transcript = _fetch_youtube_transcript(video_id)
+        metadata["transcription_mode"] = "plain_vtt"
+        _write_plain_transcript(processed_dir, raw_dir, transcript)
+
+    save_json_metadata(persona_id, source_url, metadata, base_root)
+    nature = (
+        SourceNature.PERFORMED_SPOKEN
+        if any(token in title.lower() for token in ("keynote", "speech"))
+        else SourceNature.NATURAL_SPOKEN
+    )
     return ProcessedDocument(
         title=title,
         text=transcript,
         source_nature=nature,
-        metadata={"video_id": video_id, "upload_date": upload_date, "source_url": source_url},
+        metadata=metadata,
     )
+
+
+def _write_plain_transcript(processed_dir: Path, raw_dir: Path, transcript: str) -> None:
+    (raw_dir / "transcript.txt").write_text(transcript, encoding="utf-8")
+    (processed_dir / "document.txt").write_text(transcript, encoding="utf-8")
+    (processed_dir / "transcript.txt").write_text(transcript, encoding="utf-8")
+
+
+def _download_youtube_audio(video_id: str, raw_dir: Path) -> Path:
+    output_template = str(raw_dir / "audio.%(ext)s")
+    cmd = [
+        "yt-dlp",
+        "-f",
+        "bestaudio/best",
+        "--extract-audio",
+        "--audio-format",
+        "m4a",
+        "--output",
+        output_template,
+        f"https://www.youtube.com/watch?v={video_id}",
+    ]
+    completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "yt-dlp audio download failed")
+    candidates = sorted(raw_dir.glob("audio.*"))
+    if not candidates:
+        raise RuntimeError(f"No downloaded audio file for video {video_id}")
+    return candidates[0]
 
 
 def _fetch_youtube_transcript(video_id: str) -> str:

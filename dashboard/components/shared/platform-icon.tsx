@@ -1,5 +1,5 @@
 import { createElement, type ComponentType } from "react";
-import { FileText, Globe, Image, Mic, Share2 } from "lucide-react";
+import { FileText, Globe, Image, Mic, Share } from "@/lib/icons";
 import { FaLinkedin } from "react-icons/fa6";
 import {
   SiApplepodcasts,
@@ -11,6 +11,7 @@ import {
 } from "react-icons/si";
 
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 type IconProps = { className?: string };
 
@@ -28,7 +29,7 @@ const PLATFORM_META: Record<string, PlatformMeta> = {
   Instagram: { icon: SiInstagram, colorClass: "text-[#E4405F]" },
   Facebook: { icon: SiFacebook, colorClass: "text-[#1877F2]" },
   LinkedIn: { icon: FaLinkedin, colorClass: "text-[#0A66C2]" },
-  Social: { icon: Share2, colorClass: "text-muted-foreground" },
+  Social: { icon: Share, colorClass: "text-muted-foreground" },
   Web: { icon: Globe, colorClass: "text-sky-600" },
   PDF: { icon: FileText, colorClass: "text-red-600" },
   Image: { icon: Image, colorClass: "text-violet-600" },
@@ -68,20 +69,22 @@ export function PlatformFilterButton({
   const meta = getPlatformMeta(platform);
 
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="icon-sm"
       title={`${platform} · ${count.toLocaleString("hu-HU")} unit`}
       aria-label={`${platform}, ${count} unit`}
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "inline-flex size-8 items-center justify-center rounded-md border transition-colors",
+        "size-8 rounded-md",
         active
           ? "border-primary bg-primary/10 ring-1 ring-primary/30"
           : "border-border bg-background hover:bg-muted/80"
       )}
     >
       {createElement(meta.icon, { className: cn("size-4", meta.colorClass) })}
-    </button>
+    </Button>
   );
 }

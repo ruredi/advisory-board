@@ -17,6 +17,10 @@ OPENAI_EMBEDDING_USD_PER_M: dict[str, float] = {
     "text-embedding-ada-002": 0.10,
 }
 
+# GPT-4o chat vision rough Standard tier (USD per 1M tokens).
+OPENAI_VISION_INPUT_USD_PER_M = 2.50
+OPENAI_VISION_OUTPUT_USD_PER_M = 10.00
+
 DEFAULT_SCRAPFLY_USD_PER_CREDIT = 30.0 / 200_000  # Discovery plan baseline
 
 
@@ -44,5 +48,26 @@ def estimate_openai_embedding_cost_usd(*, model: str, input_tokens: int) -> floa
     return (input_tokens / 1_000_000) * rate
 
 
+def estimate_openai_vision_cost_usd(*, model: str, input_tokens: int, output_tokens: int) -> float:
+    del model
+    return (input_tokens / 1_000_000) * OPENAI_VISION_INPUT_USD_PER_M + (
+        output_tokens / 1_000_000
+    ) * OPENAI_VISION_OUTPUT_USD_PER_M
+
+
 def estimate_scrapfly_cost_usd(*, credits: float) -> float:
     return credits * scrapfly_usd_per_credit()
+
+
+DEFAULT_SUPADATA_USD_PER_CREDIT = 30.0 / 2000  # rough Discovery-tier baseline
+
+
+def supadata_usd_per_credit() -> float:
+    raw = os.environ.get("SUPADATA_USD_PER_CREDIT", "").strip()
+    if raw:
+        return float(raw)
+    return DEFAULT_SUPADATA_USD_PER_CREDIT
+
+
+def estimate_supadata_cost_usd(*, credits: float) -> float:
+    return credits * supadata_usd_per_credit()

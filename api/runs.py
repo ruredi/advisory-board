@@ -4,12 +4,14 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from api.deps import persona_store
+from api.jobs import job_manager
 from api.schemas import PipelineEvent, RunProgressResponse, SyncRunDetail
 from memory_builder.telemetry.queries import (
     get_run_progress,
     list_pipeline_events,
     list_sync_runs,
 )
+from memory_builder.telemetry.run_cancel import stop_open_run
 
 router = APIRouter(tags=["runs"])
 
@@ -24,6 +26,10 @@ def list_runs(persona_id: str, limit: int = 50) -> list[SyncRunDetail]:
             persona_id=str(row["persona_id"]),
             started_at=str(row["started_at"]),
             finished_at=row["finished_at"],
+            stopped_at=row.get("stopped_at"),
+            stop_reason=row.get("stop_reason"),
+            last_activity_at=row.get("last_activity_at"),
+            active_duration_seconds=int(row.get("active_duration_seconds") or 0),
             sources_discovered=int(row["sources_discovered"] or 0),
             sources_processed=int(row.get("sources_processed_display", row["sources_processed"] or 0)),
             units_created=int(row["units_created"] or 0),
@@ -31,11 +37,12 @@ def list_runs(persona_id: str, limit: int = 50) -> list[SyncRunDetail]:
             errors=int(row.get("errors_display", row["errors"] or 0)),
             cost_usd=float(row.get("cost_usd_display", row["cost_usd"] or 0)),
             summary=row["summary"],
-            status="running" if row["finished_at"] is None else "finished",
+            status=str(row.get("status") or ("running" if row["finished_at"] is None else "finished")),
             done_count=int(row.get("done_count", 0)),
             error_count=int(row.get("error_count", 0)),
             skip_count=int(row.get("skip_count", 0)),
             api_calls=int(row.get("api_calls", 0)),
+            run_mode=str(row.get("run_mode") or "—"),
         )
         for row in rows
     ]
@@ -52,11 +59,59 @@ def get_run(persona_id: str, run_id: int) -> RunProgressResponse:
         persona_id=progress.persona_id,
         started_at=progress.started_at,
         finished_at=progress.finished_at,
-        status="running" if progress.finished_at is None else "finished",
+        stopped_at=progress.stopped_at,
+        stop_reason=progress.stop_reason,
+        last_activity_at=progress.last_activity_at,
+        active_duration_seconds=progress.active_duration_seconds,
+        status=progress.status,
         latest_stage=progress.latest_stage,
         latest_message=progress.latest_message,
         events_count=progress.events_count,
         sources_processed=progress.sources_processed,
+        sources_discovered=progress.sources_discovered,
+        run_mode=progress.run_mode,
+        cost_run_usd=progress.cost_run_usd,
+        cost_persona_usd=progress.cost_persona_usd,
+        cost_today_usd=progress.cost_today_usd,
+        current_platform=progress.current_platform,
+        current_title=progress.current_title,
+        current_url=progress.current_url,
+        current_stage=progress.current_stage,
+        done_count=progress.done_count,
+        error_count=progress.error_count,
+        skip_count=progress.skip_count,
+    )
+
+
+@router.post("/personas/{persona_id}/runs/{run_id}/stop", response_model=RunProgressResponse)
+def stop_run(persona_id: str, run_id: int) -> RunProgressResponse:
+    with persona_store(persona_id) as store:
+        progress = get_run_progress(store, persona_id, run_id)
+        if progress is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if progress.status != "running":
+            raise HTTPException(status_code=409, detail="Run is not running")
+        if not stop_open_run(store, persona_id, run_id, job_manager=job_manager):
+            raise HTTPException(status_code=409, detail="Run could not be stopped")
+        progress = get_run_progress(store, persona_id, run_id)
+    if progress is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return RunProgressResponse(
+        run_id=progress.run_id,
+        persona_id=progress.persona_id,
+        started_at=progress.started_at,
+        finished_at=progress.finished_at,
+        stopped_at=progress.stopped_at,
+        stop_reason=progress.stop_reason,
+        last_activity_at=progress.last_activity_at,
+        active_duration_seconds=progress.active_duration_seconds,
+        status=progress.status,
+        latest_stage=progress.latest_stage,
+        latest_message=progress.latest_message,
+        events_count=progress.events_count,
+        sources_processed=progress.sources_processed,
+        sources_discovered=progress.sources_discovered,
+        run_mode=progress.run_mode,
         cost_run_usd=progress.cost_run_usd,
         cost_persona_usd=progress.cost_persona_usd,
         cost_today_usd=progress.cost_today_usd,

@@ -1,9 +1,9 @@
-import { createElement, type JSX } from "react";
-import { Globe, Mail, Podcast, Rss, type LucideIcon } from "lucide-react";
+import { createElement, type ComponentType, type JSX } from "react";
+import { Globe, Mail, Podcast, Rss } from "@/lib/icons";
 
 import { cn } from "@/lib/utils";
 
-type IconComponent = LucideIcon | ((props: { className?: string }) => JSX.Element);
+type IconComponent = ComponentType<{ className?: string }> | ((props: { className?: string }) => JSX.Element);
 
 export type ChannelTypeCategory = "media" | "social" | "web";
 
@@ -91,7 +91,7 @@ export const CHANNEL_TYPE_GROUPS: {
         label: "X (Twitter)",
         description: "X/Twitter profil — timeline scraping",
         urlHint: "x.com/AlexHormozi",
-        supported: false,
+        supported: true,
         iconClass: "text-foreground",
         badgeClass: "bg-foreground/10 text-foreground border-foreground/20",
       },
@@ -100,7 +100,7 @@ export const CHANNEL_TYPE_GROUPS: {
         label: "Instagram",
         description: "Instagram profil — posztok gyűjtése",
         urlHint: "instagram.com/alexhormozi",
-        supported: false,
+        supported: true,
         iconClass: "text-[#E4405F]",
         badgeClass: "bg-[#E4405F]/10 text-[#E4405F] border-[#E4405F]/20",
       },
@@ -109,7 +109,7 @@ export const CHANNEL_TYPE_GROUPS: {
         label: "Facebook",
         description: "Facebook oldal vagy profil",
         urlHint: "facebook.com/…",
-        supported: false,
+        supported: true,
         iconClass: "text-[#1877F2]",
         badgeClass: "bg-[#1877F2]/10 text-[#1877F2] border-[#1877F2]/20",
       },
@@ -118,7 +118,7 @@ export const CHANNEL_TYPE_GROUPS: {
         label: "TikTok",
         description: "TikTok profil",
         urlHint: "tiktok.com/@…",
-        supported: false,
+        supported: true,
         iconClass: "text-foreground",
         badgeClass: "bg-foreground/10 text-foreground border-foreground/20",
       },
@@ -136,7 +136,7 @@ export const CHANNEL_TYPE_GROUPS: {
         label: "LinkedIn",
         description: "LinkedIn személyes vagy céges profil",
         urlHint: "linkedin.com/in/…",
-        supported: false,
+        supported: true,
         iconClass: "text-[#0A66C2]",
         badgeClass: "bg-[#0A66C2]/10 text-[#0A66C2] border-[#0A66C2]/20",
       },
@@ -151,7 +151,7 @@ export const CHANNEL_TYPE_GROUPS: {
         label: "Weboldal",
         description: "Blog vagy landing — linkek felfedezése",
         urlHint: "example.com/blog",
-        supported: false,
+        supported: true,
         iconClass: "text-sky-600",
         badgeClass: "bg-sky-500/10 text-sky-700 border-sky-500/20 dark:text-sky-400",
       },

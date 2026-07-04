@@ -20,6 +20,7 @@ from api.schemas import (
     SoulDeployRequest,
     SoulResponse,
 )
+from memory_builder.advisor_seeds import default_source_config
 from memory_builder.config import load_persona_config, persona_config_to_dict, save_persona_config
 from memory_builder.paths import persona_config_path, project_root
 
@@ -71,22 +72,7 @@ def _ensure_advisor(advisor_id: str) -> dict:
 
 
 def _source_config_template(advisor_id: str, display_name: str) -> dict:
-    return {
-        "persona_id": advisor_id,
-        "display_name": display_name,
-        "seed_link_files": [],
-        "speaker_names": [display_name],
-        "allowed_domains": [],
-        "watch_feeds": [],
-        "social_profiles": [],
-        "min_confidence": "weak",
-        "embedding_model": "text-embedding-3-small",
-        "extraction_model": "gemini-2.5-flash",
-        "transcription_model": "gemini-2.5-flash",
-        "vision_model": "gemini-2.5-flash",
-        "vector_store": "qdrant",
-        "qdrant_url": "",
-    }
+    return default_source_config(advisor_id, display_name)
 
 
 CONFIG_FILE_DEFS = {

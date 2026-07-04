@@ -1,5 +1,5 @@
-import { ReviewPageClient } from "@/components/review/review-page";
+import { redirect } from "next/navigation";
 
 export default function ReviewPage() {
-  return <ReviewPageClient />;
+  redirect("/advisors?tab=channels");
 }

@@ -11,7 +11,12 @@ import httpx
 from memory_builder.discovery.seed_links import classify_source_type, infer_source_nature, is_processable_source
 from memory_builder.discovery.youtube_ytdlp import resolve_youtube_channel_id_ytdlp
 from memory_builder.models import SourceRecord, SourceStatus
-from memory_builder.storage.sqlite_store import normalize_url
+from collections.abc import Callable
+
+from memory_builder.discovery.watermarks import is_newer_than, parse_http_last_modified
+from memory_builder.discovery.source_emit import OnSourceRecord
+from memory_builder.storage.sqlite_store import SQLiteStore, normalize_url
+from memory_builder.telemetry.discovery_events import discovery_log
 
 
 log = logging.getLogger(__name__)
@@ -68,6 +73,7 @@ def _parse_rss_feed(
     *,
     watermark: str | None = None,
     channel_url: str | None = None,
+    on_record: OnSourceRecord | None = None,
 ) -> list[SourceRecord]:
     parsed = feedparser.parse(feed_url)
     records: list[SourceRecord] = []
@@ -84,26 +90,42 @@ def _parse_rss_feed(
             continue
         seen.add(link)
         source_type = classify_source_type(link)
-        records.append(
-            SourceRecord(
-                persona_id=persona_id,
-                source_url=link,
-                source_title=getattr(entry, "title", link),
-                source_type=source_type,
-                source_date=published,
-                source_nature=infer_source_nature(source_type, link),
-                status=SourceStatus.PENDING,
-                channel_url=channel_url,
-            )
+        record = SourceRecord(
+            persona_id=persona_id,
+            source_url=link,
+            source_title=getattr(entry, "title", link),
+            source_type=source_type,
+            source_date=published,
+            source_nature=infer_source_nature(source_type, link),
+            status=SourceStatus.PENDING,
+            channel_url=channel_url,
         )
+        if on_record is not None:
+            if not on_record(record):
+                break
+        records.append(record)
     return records
 
 
-def _discover_web_links(persona_id: str, page_url: str, seen: set[str]) -> list[SourceRecord]:
+def _discover_web_links(
+    persona_id: str,
+    page_url: str,
+    seen: set[str],
+    *,
+    store: SQLiteStore | None = None,
+    watermark: str | None = None,
+    on_record: OnSourceRecord | None = None,
+) -> list[SourceRecord]:
     try:
         response = httpx.get(page_url, timeout=30.0, follow_redirects=True)
         response.raise_for_status()
     except httpx.HTTPError:
+        return []
+    last_modified = parse_http_last_modified(response.headers.get("Last-Modified"))
+    if watermark and last_modified and not is_newer_than(last_modified, watermark):
+        discovery_log(
+            f"Web: oldal nem módosult a watermark óta ({last_modified[:10]}) — {page_url}"
+        )
         return []
     links = re.findall(r'href="(https?://[^"]+)"', response.text)
     records: list[SourceRecord] = []
@@ -112,19 +134,27 @@ def _discover_web_links(persona_id: str, page_url: str, seen: set[str]) -> list[
         normalized = normalize_url(link)
         if normalized in seen:
             continue
-        if urlparse(normalized).netloc.lower().endswith(host.removeprefix("www.")) or "acquisition.com" in normalized:
-            if not is_processable_source(normalized):
-                continue
-            seen.add(normalized)
-            source_type = classify_source_type(normalized)
-            records.append(
-                SourceRecord(
-                    persona_id=persona_id,
-                    source_url=normalized,
-                    source_title=normalized,
-                    source_type=source_type,
-                    source_nature=infer_source_nature(source_type, normalized),
-                    status=SourceStatus.PENDING,
-                )
-            )
+        host_match = urlparse(normalized).netloc.lower().endswith(host.removeprefix("www."))
+        if not host_match and "acquisition.com" not in normalized:
+            continue
+        if not is_processable_source(normalized):
+            continue
+        if store and not store.source_url_is_new(normalized):
+            continue
+        seen.add(normalized)
+        source_type = classify_source_type(normalized)
+        record = SourceRecord(
+            persona_id=persona_id,
+            source_url=normalized,
+            source_title=normalized,
+            source_type=source_type,
+            source_date=last_modified,
+            source_nature=infer_source_nature(source_type, normalized),
+            status=SourceStatus.PENDING,
+            channel_url=page_url,
+        )
+        if on_record is not None:
+            if not on_record(record):
+                break
+        records.append(record)
     return records

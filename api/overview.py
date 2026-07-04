@@ -40,15 +40,17 @@ def _last_run(store: SQLiteStore, persona_id: str) -> RunSummary | None:
     ).fetchone()
     if row is None:
         return None
+    run_id = int(row["id"])
+    live_cost = get_cost_totals(store, persona_id, run_id=run_id)
     return RunSummary(
-        run_id=int(row["id"]),
+        run_id=run_id,
         started_at=str(row["started_at"]),
         finished_at=row["finished_at"],
         sources_discovered=int(row["sources_discovered"] or 0),
         sources_processed=int(row["sources_processed"] or 0),
         units_created=int(row["units_created"] or 0),
         errors=int(row["errors"] or 0),
-        cost_usd=float(row["cost_usd"] or 0),
+        cost_usd=live_cost.cost_usd,
     )
 
 
@@ -97,6 +99,8 @@ def build_persona_overview(persona_id: str) -> PersonaOverview:
         status_counts = _source_status_counts(store, persona_id)
         cost_today = get_cost_totals(store, persona_id, day="now")
         cost_total = get_cost_totals(store, persona_id)
+        today_api = get_cost_totals(store, persona_id, day="now", exclude_provider="scrapfly")
+        today_scrapfly = get_cost_totals(store, persona_id, day="now", provider="scrapfly")
         return PersonaOverview(
             persona_id=persona_id,
             display_name=config.display_name,
@@ -108,6 +112,11 @@ def build_persona_overview(persona_id: str) -> PersonaOverview:
                 today_calls=cost_today.call_count,
                 total_usd=cost_total.cost_usd,
                 total_calls=cost_total.call_count,
+                today_api_usd=today_api.cost_usd,
+                today_api_calls=today_api.call_count,
+                today_scrapfly_usd=today_scrapfly.cost_usd,
+                today_scrapfly_calls=today_scrapfly.call_count,
+                today_scrapfly_credits=today_scrapfly.api_credits,
             ),
             last_run=_last_run(store, persona_id),
             active_run=_active_run(store, persona_id),

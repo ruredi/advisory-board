@@ -17,6 +17,7 @@ import jmespath
 from scrapfly import ScrapeConfig
 
 from memory_builder.fetch.scrapfly_client import get_scrapfly_client
+from memory_builder.telemetry.discovery_events import discovery_log
 from memory_builder.telemetry.usage_helpers import maybe_record_scrapfly
 
 
@@ -99,6 +100,7 @@ def parse_tweet(data: dict[str, Any]) -> dict[str, Any]:
         attached_urls: legacy.entities.urls[].expanded_url,
         attached_urls2: legacy.entities.url.urls[].expanded_url,
         attached_media: legacy.entities.media[].media_url_https,
+        media: legacy.entities.media[].{type: type, url: media_url_https},
         tagged_users: legacy.entities.user_mentions[].screen_name,
         tagged_hashtags: legacy.entities.hashtags[].text,
         favorite_count: legacy.favorite_count,
@@ -500,7 +502,20 @@ async def scrape_profile(url: str) -> dict[str, Any]:
     }
 
 
-async def scrape_profile_tweets(url: str, max_posts: int = 50) -> list[dict[str, Any]]:
+async def scrape_profile_tweets_since(
+    url: str,
+    *,
+    since_iso: str | None = None,
+    known_urls: set[str] | None = None,
+    max_posts: int = 200,
+) -> list[dict[str, Any]]:
+    from memory_builder.discovery.watermarks import is_newer_than, parse_twitter_created_at
+
+    watermark_label = since_iso[:10] if since_iso else "nincs"
+    discovery_log(
+        f"X {url}: új tweetek keresése (watermark: {watermark_label})",
+        metadata={"platform": "x", "profile_url": url},
+    )
     result = await _scrape_twitter_page(url, wait_for_selector="xhr:UserTweets")
     page_html = result.content or ""
     screen_name = _screen_name_from_url(url) or "i/web"
@@ -521,6 +536,15 @@ async def scrape_profile_tweets(url: str, max_posts: int = 50) -> list[dict[str,
             tweet_id = parsed.get("id")
             if not tweet_id or tweet_id in seen_ids:
                 continue
+            parsed.setdefault("user", {"screen_name": screen_name})
+            tweet_url = tweet_public_url(parsed)
+            if known_urls and tweet_url in known_urls:
+                discovery_log(f"X {url}: ismert tweet elérve, leállás")
+                return tweets
+            created = parse_twitter_created_at(parsed.get("created_at"))
+            if since_iso and created and not is_newer_than(created, since_iso):
+                discovery_log(f"X {url}: watermark elérve ({created[:10]}), leállás")
+                return tweets
             seen_ids.add(tweet_id)
             tweets.append(parsed)
             if len(tweets) >= max_posts:
@@ -529,18 +553,28 @@ async def scrape_profile_tweets(url: str, max_posts: int = 50) -> list[dict[str,
     for tweet_id in extract_status_ids(page_html, max_posts):
         if tweet_id in seen_ids:
             continue
+        tweet = {
+            "id": tweet_id,
+            "text": "",
+            "user": {"screen_name": screen_name},
+        }
+        tweet_url = tweet_public_url(tweet)
+        if known_urls and tweet_url in known_urls:
+            discovery_log(f"X {url}: ismert tweet elérve, leállás")
+            return tweets
         seen_ids.add(tweet_id)
-        tweets.append(
-            {
-                "id": tweet_id,
-                "text": "",
-                "user": {"screen_name": screen_name},
-            }
-        )
+        tweets.append(tweet)
+        if len(tweets) >= max_posts:
+            break
 
     if not tweets:
         raise RuntimeError(f"Failed to scrape profile tweets: no status links found for {url}")
+    discovery_log(f"X {url}: {len(tweets)} új tweet a watermark felett")
     return tweets
+
+
+async def scrape_profile_tweets(url: str, max_posts: int = 50) -> list[dict[str, Any]]:
+    return await scrape_profile_tweets_since(url, since_iso=None, max_posts=max_posts)
 
 
 def tweet_public_url(tweet: dict[str, Any]) -> str:

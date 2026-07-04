@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from typing import Any
 
 from memory_builder.extraction.prompts import EXTRACTION_SYSTEM, EXTRACTION_USER
 from memory_builder.gemini_client import build_gemini_client
 from memory_builder.models import Confidence, ContentType, KnowledgeUnit, SourceNature
 from memory_builder.normalize import normalize_string_list
+from memory_builder.pipeline.fatal_errors import is_transient_error
+from memory_builder.processors.diarized_transcript import TranscriptSegments
+from memory_builder.processors.speaker_turns import enrich_quote
 from memory_builder.telemetry.context import get_run_context
+
+log = logging.getLogger(__name__)
 
 
 def extract_knowledge_units(
@@ -25,6 +32,7 @@ def extract_knowledge_units(
     model: str = "gemini-2.5-flash",
     source_index: int | None = None,
     source_total: int | None = None,
+    segments: TranscriptSegments | None = None,
 ) -> list[KnowledgeUnit]:
     text = text.strip()
     if not text:
@@ -45,16 +53,24 @@ def extract_knowledge_units(
                 api_key=api_key,
                 source_index=source_index,
                 source_total=source_total,
+                segments=segments,
             )
-        except Exception:
-            pass
-    return _extract_heuristic(
-        persona_id=persona_id,
-        source_id=source_id,
-        display_name=display_name,
-        text=text,
-        source_nature=source_nature,
-    )
+        except Exception as exc:
+            log.warning("Gemini extraction failed for source %s, using heuristic fallback: %s", source_id, exc)
+    try:
+        return _extract_heuristic(
+            persona_id=persona_id,
+            source_id=source_id,
+            display_name=display_name,
+            text=text,
+            source_nature=source_nature,
+            source_url=source_url,
+            title=title,
+            segments=segments,
+        )
+    except Exception as exc:
+        log.warning("Heuristic extraction failed for source %s: %s", source_id, exc)
+        return []
 
 
 def _extract_with_gemini(
@@ -71,11 +87,13 @@ def _extract_with_gemini(
     api_key: str,
     source_index: int | None = None,
     source_total: int | None = None,
+    segments: TranscriptSegments | None = None,
 ) -> list[KnowledgeUnit]:
     client = build_gemini_client(api_key)
     chunks = _chunk_text(text, max_chars=12000)
     chunk_total = len(chunks)
     units: list[KnowledgeUnit] = []
+    system_instruction = EXTRACTION_SYSTEM.format(display_name=display_name)
     for chunk_index, chunk in enumerate(chunks, start=1):
         _report_extract_chunk_progress(
             chunk_index=chunk_index,
@@ -92,10 +110,11 @@ def _extract_with_gemini(
             speaker_names=", ".join(speaker_names),
             text=chunk,
         )
-        response = client.models.generate_content(
+        response = _generate_content_with_retry(
+            client,
             model=model,
             contents=prompt,
-            config={"system_instruction": EXTRACTION_SYSTEM, "response_mime_type": "application/json"},
+            config={"system_instruction": system_instruction, "response_mime_type": "application/json"},
         )
         ctx = get_run_context()
         if ctx:
@@ -113,9 +132,31 @@ def _extract_with_gemini(
                 persona_id=persona_id,
                 source_id=source_id,
                 default_source_nature=source_nature,
+                display_name=display_name,
+                speaker_names=speaker_names,
+                source_url=source_url,
+                source_title=title,
+                segments=segments,
             )
         )
     return units
+
+
+def _generate_content_with_retry(client: Any, **kwargs: Any) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return client.models.generate_content(**kwargs)
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2 and is_transient_error(exc):
+                delay_seconds = 5 * (attempt + 1)
+                time.sleep(delay_seconds)
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Gemini generate_content failed without exception")
 
 
 def _report_extract_chunk_progress(
@@ -148,6 +189,9 @@ def _extract_heuristic(
     display_name: str,
     text: str,
     source_nature: str,
+    source_url: str,
+    title: str,
+    segments: TranscriptSegments | None,
 ) -> list[KnowledgeUnit]:
     units: list[KnowledgeUnit] = []
     paragraphs = [part.strip() for part in re.split(r"\n{2,}", text) if part.strip()]
@@ -174,7 +218,18 @@ def _extract_heuristic(
             match = re.search(r'"([^"]{12,300})"|“([^”]{12,300})”', paragraph)
             if match:
                 quote_text = match.group(1) or match.group(2) or ""
-                quotes.append({"text": quote_text, "is_verbatim": True, "speaker": display_name})
+                enriched = enrich_quote(
+                    {"text": quote_text, "is_verbatim": True, "speaker": display_name},
+                    display_name=display_name,
+                    speaker_names=[display_name],
+                    segments=segments,
+                    source_url=source_url,
+                    source_title=title,
+                )
+                if enriched:
+                    quotes.append(enriched)
+                else:
+                    confidence = Confidence.WEAK
             else:
                 confidence = Confidence.WEAK
         elif any(token in lowered for token in ("framework", "process", "model")):
@@ -184,6 +239,8 @@ def _extract_heuristic(
         elif any(token in lowered for token in ("for example", "case study", "client")):
             content_type = ContentType.EXAMPLE
 
+        if content_type == ContentType.QUOTE and not quotes:
+            continue
         if len(paragraph) < 80 and content_type == ContentType.TRANSCRIPT_CHUNK:
             continue
 
@@ -212,6 +269,11 @@ def _payload_to_units(
     persona_id: str,
     source_id: int,
     default_source_nature: str,
+    display_name: str,
+    speaker_names: list[str],
+    source_url: str,
+    source_title: str,
+    segments: TranscriptSegments | None,
 ) -> list[KnowledgeUnit]:
     units: list[KnowledgeUnit] = []
     for item in payload:
@@ -221,11 +283,24 @@ def _payload_to_units(
         if not chunk_text:
             continue
         content_type = str(item.get("content_type", ContentType.TRANSCRIPT_CHUNK))
-        quotes = item.get("quotes") or []
+        raw_quotes = item.get("quotes") or []
+        quotes: list[dict[str, Any]] = []
+        for quote in raw_quotes:
+            if not isinstance(quote, dict):
+                continue
+            enriched = enrich_quote(
+                quote,
+                display_name=display_name,
+                speaker_names=speaker_names,
+                segments=segments,
+                source_url=source_url,
+                source_title=source_title,
+            )
+            if enriched:
+                quotes.append(enriched)
         evidence_type = str(item.get("evidence_type", "source_supported"))
         if content_type == ContentType.QUOTE:
-            if not quotes or not any(q.get("is_verbatim") and q.get("text") for q in quotes):
-                evidence_type = "insufficient_evidence"
+            if not quotes:
                 continue
         units.append(
             KnowledgeUnit(
@@ -241,11 +316,12 @@ def _payload_to_units(
                 concepts=normalize_string_list(item.get("concepts")),
                 advice_contexts=normalize_string_list(item.get("advice_contexts")),
                 examples=normalize_string_list(item.get("examples")),
-                quotes=list(quotes),
+                quotes=quotes,
                 confidence=str(item.get("confidence", Confidence.MEDIUM)),
                 source_nature=str(item.get("source_nature", default_source_nature)),
                 evidence_type=evidence_type,
                 retrieval_priority=80 if item.get("steps") else 60,
+                speaker=display_name if quotes else None,
             )
         )
     return units
