@@ -239,7 +239,9 @@ export function SourceDetailPanel({
   }
 
   const detail = detailQuery.data;
-  const hasSegments = detail?.transcript_variants.some((variant) => variant.key === "labeled" && variant.available);
+  const hasSegments = detail?.transcript_variants.some(
+    (variant) => variant.key === "segments" && variant.available
+  );
 
   const header = (
     <div className="space-y-3">

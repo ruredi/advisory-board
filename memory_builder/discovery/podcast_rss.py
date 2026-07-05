@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import feedparser
 import httpx
 
-from memory_builder.discovery.seed_links import classify_source_type, infer_source_nature, is_processable_source
+from memory_builder.discovery.seed_links import classify_source_type, infer_media_format, infer_source_nature, is_processable_source
 from memory_builder.discovery.source_emit import OnSourceRecord
 from memory_builder.discovery.watermarks import is_newer_than
 from memory_builder.models import SourceRecord, SourceStatus
@@ -152,6 +152,7 @@ def discover_podcast_rss_feed(
             source_type=source_type,
             source_date=published,
             source_nature=infer_source_nature(source_type, link),
+            media_format=infer_media_format(source_type, link),
             status=SourceStatus.PENDING,
             channel_url=channel_url,
         )

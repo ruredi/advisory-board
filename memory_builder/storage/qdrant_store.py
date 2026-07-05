@@ -81,7 +81,11 @@ class QdrantStore:
         from qdrant_client.http import models as qmodels
 
         self.ensure_collection(len(vector))
-        point_payload = {"persona_id": self.persona_id, "knowledge_unit_id": unit_id}
+        point_payload = {
+            "persona_id": self.persona_id,
+            "record_type": "knowledge_unit",
+            "knowledge_unit_id": unit_id,
+        }
         if payload:
             point_payload.update(payload)
         self.client.upsert(
@@ -89,6 +93,26 @@ class QdrantStore:
             points=[
                 qmodels.PointStruct(
                     id=unit_id,
+                    vector=vector,
+                    payload=point_payload,
+                )
+            ],
+        )
+
+    def upsert_segment(self, point_id: str, vector: list[float], payload: dict[str, Any]) -> None:
+        from qdrant_client.http import models as qmodels
+
+        self.ensure_collection(len(vector))
+        point_payload = {
+            "persona_id": self.persona_id,
+            "record_type": "segment",
+            **payload,
+        }
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=[
+                qmodels.PointStruct(
+                    id=point_id,
                     vector=vector,
                     payload=point_payload,
                 )
@@ -118,17 +142,82 @@ class QdrantStore:
     def search(self, vector: list[float], top_k: int = 8) -> list[tuple[int, float]]:
         if not self.collection_exists():
             return []
+        from qdrant_client.http import models as qmodels
+
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=vector,
             limit=top_k,
             with_payload=True,
+            query_filter=qmodels.Filter(
+                should=[
+                    qmodels.FieldCondition(
+                        key="record_type",
+                        match=qmodels.MatchValue(value="knowledge_unit"),
+                    ),
+                    qmodels.IsNullCondition(is_null=qmodels.PayloadField(key="record_type")),
+                ]
+            ),
         )
         results: list[tuple[int, float]] = []
         for hit in response.points:
             unit_id = int(hit.payload.get("knowledge_unit_id", hit.id))
             results.append((unit_id, float(hit.score)))
         return results
+
+    def search_segments(
+        self,
+        vector: list[float],
+        *,
+        top_k: int = 8,
+        source_id: int | None = None,
+    ) -> list[tuple[str, float, dict[str, Any]]]:
+        if not self.collection_exists():
+            return []
+        from qdrant_client.http import models as qmodels
+
+        must: list[qmodels.Condition] = [
+            qmodels.FieldCondition(key="record_type", match=qmodels.MatchValue(value="segment")),
+        ]
+        if source_id is not None:
+            must.append(
+                qmodels.FieldCondition(key="source_id", match=qmodels.MatchValue(value=source_id))
+            )
+        response = self.client.query_points(
+            collection_name=self.collection_name,
+            query=vector,
+            limit=top_k,
+            with_payload=True,
+            query_filter=qmodels.Filter(must=must),
+        )
+        results: list[tuple[str, float, dict[str, Any]]] = []
+        for hit in response.points:
+            payload = dict(hit.payload or {})
+            results.append((str(hit.id), float(hit.score), payload))
+        return results
+
+    def delete_segments_for_source(self, source_id: int) -> None:
+        if not self.collection_exists():
+            return
+        from qdrant_client.http import models as qmodels
+
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=qmodels.FilterSelector(
+                filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="record_type",
+                            match=qmodels.MatchValue(value="segment"),
+                        ),
+                        qmodels.FieldCondition(
+                            key="source_id",
+                            match=qmodels.MatchValue(value=source_id),
+                        ),
+                    ]
+                )
+            ),
+        )
 
     @classmethod
     def memory_client(cls, *, path: str = ":memory:") -> "QdrantStore":

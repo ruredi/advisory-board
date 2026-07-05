@@ -7,9 +7,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from memory_builder.fetch.downloader import save_json_metadata, source_slug
-from memory_builder.models import ProcessedDocument, SourceNature
+from memory_builder.models import MediaFormat, ProcessedDocument, SourceNature
 from memory_builder.paths import project_root, sources_processed_dir, sources_raw_dir
-from memory_builder.processors.transcript_pipeline import build_diarized_document_text
+from memory_builder.processors.transcript_pipeline import (
+    build_diarized_document_text,
+    build_text_attributed_document_text,
+)
 
 
 def youtube_video_id(url: str) -> str | None:
@@ -82,6 +85,7 @@ def process_youtube(
             metadata.update(
                 {
                     "transcription_mode": "diarized",
+                    "attribution_mode": "audio_diarized",
                     "audio_path": str(audio_path),
                     "segment_count": len(segments.segments),
                     "target_segment_count": sum(
@@ -94,10 +98,35 @@ def process_youtube(
         except Exception as exc:
             if not allow_unlabeled_fallback:
                 raise RuntimeError(f"YouTube diarized transcription failed: {exc}") from exc
-            transcript = _fetch_youtube_transcript(video_id)
-            metadata["transcription_mode"] = "fallback_vtt"
-            metadata["diarization_error"] = str(exc)
-            _write_plain_transcript(processed_dir, raw_dir, transcript)
+            plain = _fetch_youtube_transcript(video_id)
+            if display_name:
+                source_context = f"Title: {title}\nURL: {source_url}"
+                extraction_input, segments, artifact_paths = build_text_attributed_document_text(
+                    raw_transcript=plain,
+                    transcription_model=transcription_model,
+                    display_name=display_name,
+                    speaker_names=speaker_names or [],
+                    processed_dir=processed_dir,
+                    source_context=source_context,
+                )
+                metadata.update(
+                    {
+                        "transcription_mode": "text_attributed",
+                        "attribution_mode": "text_attributed",
+                        "diarization_error": str(exc),
+                        "segment_count": len(segments.segments),
+                        "target_segment_count": sum(
+                            1 for segment in segments.segments if segment.speaker_type == "target"
+                        ),
+                        **{f"path_{key}": value for key, value in artifact_paths.items()},
+                    }
+                )
+                transcript = extraction_input
+            else:
+                metadata["transcription_mode"] = "fallback_vtt"
+                metadata["diarization_error"] = str(exc)
+                _write_plain_transcript(processed_dir, raw_dir, plain)
+                transcript = plain
     else:
         transcript = _fetch_youtube_transcript(video_id)
         metadata["transcription_mode"] = "plain_vtt"
@@ -113,6 +142,7 @@ def process_youtube(
         title=title,
         text=transcript,
         source_nature=nature,
+        media_format=MediaFormat.VIDEO,
         metadata=metadata,
     )
 

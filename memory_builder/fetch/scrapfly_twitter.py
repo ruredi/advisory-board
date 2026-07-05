@@ -26,7 +26,6 @@ log = logging.getLogger(__name__)
 BASE_CONFIG = {
     "asp": True,
     "render_js": True,
-    "session_sticky_proxy": False,
 }
 STATUS_ID_PATTERN = re.compile(r"/status/(\d{10,25})")
 STATUS_LINK_PATTERN = re.compile(

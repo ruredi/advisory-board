@@ -70,6 +70,41 @@ def build_extraction_input(segments: TranscriptSegments) -> str:
     return "\n\n".join(blocks)
 
 
+def build_extraction_input_with_context(
+    segments: TranscriptSegments,
+    *,
+    post_context: str = "",
+    source_context: str = "",
+    ocr_context: str = "",
+) -> str:
+    blocks: list[str] = []
+    if post_context.strip():
+        blocks.append(f"[POST_CONTEXT]\n{post_context.strip()}")
+    if source_context.strip():
+        blocks.append(f"[SOURCE_CONTEXT]\n{source_context.strip()}")
+    if ocr_context.strip():
+        blocks.append(f"[IMAGE_OCR_CONTEXT]\n{ocr_context.strip()}")
+    blocks.append(build_extraction_input(segments))
+    return "\n\n".join(blocks)
+
+
+def build_written_extraction_input(
+    body_text: str,
+    *,
+    post_context: str = "",
+    ocr_context: str = "",
+) -> str:
+    blocks: list[str] = []
+    if post_context.strip():
+        blocks.append(f"[POST_CONTEXT]\n{post_context.strip()}")
+    if ocr_context.strip():
+        blocks.append(f"[IMAGE_OCR_CONTEXT]\n{ocr_context.strip()}")
+    cleaned = body_text.strip()
+    if cleaned:
+        blocks.append(cleaned)
+    return "\n\n".join(blocks)
+
+
 def build_source_link(source_url: str, start_seconds: float | None) -> str:
     if start_seconds is None:
         return source_url
@@ -128,6 +163,12 @@ def enrich_quote(
     if not _speaker_matches_persona(speaker, display_name, speaker_names):
         return None
     if segments is None:
+        if _is_third_party_written_quote(quote):
+            return None
+        if not _speaker_matches_persona(speaker, display_name, speaker_names):
+            return None
+        if _looks_like_attributed_third_party(quote_text):
+            return None
         return {
             **quote,
             "speaker": display_name,
@@ -185,3 +226,19 @@ def _speaker_matches_persona(speaker: str, display_name: str, speaker_names: lis
 
 def _normalize_quote(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _is_third_party_written_quote(quote: dict[str, Any]) -> bool:
+    attribution = str(quote.get("quote_attribution", "")).strip().lower()
+    return attribution in {"third_party", "quoted_third_party", "other_speaker"}
+
+
+def _looks_like_attributed_third_party(quote_text: str) -> bool:
+    stripped = quote_text.strip()
+    if not stripped:
+        return False
+    if re.search(r'^["\'].+["\']\s*[-—–]\s*\S', stripped):
+        return True
+    if re.search(r"^(?:my client|a customer|the audience|someone asked)\b", stripped, flags=re.IGNORECASE):
+        return True
+    return False

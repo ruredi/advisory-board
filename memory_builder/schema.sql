@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS sources (
     status TEXT NOT NULL DEFAULT 'pending',
     speaker TEXT,
     source_nature TEXT NOT NULL DEFAULT 'uncertain',
+    media_format TEXT NOT NULL DEFAULT 'unknown',
     raw_path TEXT,
     error_message TEXT,
     channel_url TEXT,
@@ -26,6 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_sources_normalized_title ON sources(persona_id, n
 CREATE INDEX IF NOT EXISTS idx_sources_source_date ON sources(persona_id, source_date);
 
 CREATE INDEX IF NOT EXISTS idx_sources_persona_status ON sources(persona_id, status);
+CREATE INDEX IF NOT EXISTS idx_sources_media_format ON sources(persona_id, media_format);
 CREATE INDEX IF NOT EXISTS idx_sources_content_hash ON sources(content_hash);
 
 CREATE TABLE IF NOT EXISTS knowledge_units (

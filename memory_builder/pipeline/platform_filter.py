@@ -11,6 +11,23 @@ PLATFORM_ALIASES: dict[str, str] = {
 
 SUPPORTED_PLATFORMS: frozenset[str] = frozenset({"youtube", "spotify", "x", "instagram", "web"})
 
+SUPPORTED_MEDIA_FORMATS: frozenset[str] = frozenset({"text", "image", "video", "audio"})
+
+
+def normalize_media_filter(media_format: str) -> str:
+    key = media_format.strip().lower()
+    if key not in SUPPORTED_MEDIA_FORMATS:
+        supported = ", ".join(sorted(SUPPORTED_MEDIA_FORMATS))
+        raise ValueError(f"Unsupported --media format {media_format!r}. Choose from: {supported}")
+    return key
+
+
+def media_format_sql_filter(media_format: str | None) -> tuple[str, list[object]]:
+    if media_format is None:
+        return "", []
+    normalized = normalize_media_filter(media_format)
+    return " AND media_format = ?", [normalized]
+
 
 def normalize_platform_filter(platform: str) -> str:
     key = platform.strip().lower()

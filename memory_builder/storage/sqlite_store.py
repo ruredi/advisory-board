@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from memory_builder.models import KnowledgeUnit, SourceRecord, SourceStatus, json_dumps, json_loads
 from memory_builder.paths import db_path, project_root
-from memory_builder.pipeline.platform_filter import platform_sql_filter
+from memory_builder.pipeline.platform_filter import media_format_sql_filter, platform_sql_filter
 
 STOP_REASON_FINISHED = "finished"
 STOP_REASON_INTERRUPTED = "interrupted"
@@ -48,6 +48,8 @@ class SQLiteStore:
             conn.execute("ALTER TABLE sources ADD COLUMN channel_url TEXT")
         if "normalized_title" not in columns:
             conn.execute("ALTER TABLE sources ADD COLUMN normalized_title TEXT")
+        if "media_format" not in columns:
+            conn.execute("ALTER TABLE sources ADD COLUMN media_format TEXT NOT NULL DEFAULT 'unknown'")
         sync_columns = {row[1] for row in conn.execute("PRAGMA table_info(sync_runs)").fetchall()}
         if sync_columns and "cost_usd" not in sync_columns:
             conn.execute("ALTER TABLE sync_runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
@@ -114,8 +116,8 @@ class SQLiteStore:
             INSERT INTO sources (
                 persona_id, source_title, source_url, source_type, source_date,
                 discovered_at, processed_at, content_hash, status, speaker,
-                source_nature, raw_path, error_message, channel_url, normalized_title
-            ) VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_nature, media_format, raw_path, error_message, channel_url, normalized_title
+            ) VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(persona_id, source_url) DO UPDATE SET
                 source_title = excluded.source_title,
                 source_type = excluded.source_type,
@@ -128,6 +130,11 @@ class SQLiteStore:
                 END,
                 speaker = COALESCE(excluded.speaker, sources.speaker),
                 source_nature = COALESCE(excluded.source_nature, sources.source_nature),
+                media_format = CASE
+                    WHEN excluded.media_format IS NOT NULL AND excluded.media_format != 'unknown'
+                    THEN excluded.media_format
+                    ELSE sources.media_format
+                END,
                 raw_path = COALESCE(excluded.raw_path, sources.raw_path),
                 channel_url = COALESCE(excluded.channel_url, sources.channel_url),
                 normalized_title = COALESCE(excluded.normalized_title, sources.normalized_title),
@@ -145,6 +152,7 @@ class SQLiteStore:
                 source.status,
                 source.speaker,
                 source.source_nature,
+                source.media_format,
                 source.raw_path,
                 source.error_message,
                 source.channel_url,
@@ -297,6 +305,7 @@ class SQLiteStore:
         include_failed: bool = False,
         channel_url: str | None = None,
         platform: str | None = None,
+        media_format: str | None = None,
         limit: int | None = None,
     ) -> list[sqlite3.Row]:
         statuses = [SourceStatus.PENDING]
@@ -315,6 +324,9 @@ class SQLiteStore:
         platform_clause, platform_params = platform_sql_filter(platform)
         query += platform_clause
         params.extend(platform_params)
+        media_clause, media_params = media_format_sql_filter(media_format)
+        query += media_clause
+        params.extend(media_params)
         query += """
             ORDER BY
                 CASE source_type
@@ -362,17 +374,22 @@ class SQLiteStore:
         source_title: str | None = None,
         source_date: str | None = None,
         normalized_title: str | None = None,
+        source_nature: str | None = None,
+        media_format: str | None = None,
     ) -> None:
         conn = self.connect()
+        normalized_media = media_format if media_format and media_format != "unknown" else None
         conn.execute(
             """
             UPDATE sources SET
                 source_title = COALESCE(?, source_title),
                 source_date = COALESCE(?, source_date),
-                normalized_title = COALESCE(?, normalized_title)
+                normalized_title = COALESCE(?, normalized_title),
+                source_nature = COALESCE(?, source_nature),
+                media_format = COALESCE(?, media_format)
             WHERE id = ?
             """,
-            (source_title, source_date, normalized_title, source_id),
+            (source_title, source_date, normalized_title, source_nature, normalized_media, source_id),
         )
         conn.commit()
 

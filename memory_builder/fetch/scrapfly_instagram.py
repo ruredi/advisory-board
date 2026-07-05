@@ -588,15 +588,21 @@ def _caption_text(caption: Any) -> str:
     return str(caption)
 
 
+def extract_instagram_caption(post: dict[str, Any]) -> str:
+    caption = _caption_text(post.get("caption")).strip()
+    if caption:
+        return caption
+    captions = post.get("captions")
+    if isinstance(captions, list) and captions:
+        return str(captions[0]).strip()
+    return ""
+
+
 def format_instagram_post_text(post: dict[str, Any], username: str | None = None) -> str:
     lines: list[str] = []
     if username:
         lines.append(f"@{username}")
-    caption = _caption_text(post.get("caption"))
-    if not caption and post.get("captions"):
-        captions = post["captions"]
-        if isinstance(captions, list) and captions:
-            caption = str(captions[0])
+    caption = extract_instagram_caption(post)
     if caption:
         lines.append(caption)
     if post.get("title"):

@@ -18,13 +18,17 @@ from memory_builder.fetch.scrapfly_instagram import (
 from memory_builder.processors.social_media_enrichment import (
     append_image_texts_section,
     append_transcript_section,
+    classify_social_media_format,
+    instagram_cover_image_urls,
     instagram_has_video,
     instagram_image_urls,
+    instagram_media_format,
     resolve_source_nature,
     tweet_has_video,
     tweet_image_urls,
+    tweet_media_format,
 )
-from memory_builder.models import SourceNature
+from memory_builder.models import MediaFormat, SourceNature
 
 
 class SupadataUrlTests(unittest.TestCase):
@@ -133,6 +137,14 @@ class InstagramCarouselTests(unittest.TestCase):
         self.assertTrue(instagram_has_video(post))
         self.assertEqual(instagram_image_urls(post), ["https://img/1.jpg"])
 
+    def test_instagram_cover_image_urls_for_video(self) -> None:
+        post = {
+            "is_video": True,
+            "src": "https://img/cover.jpg",
+            "images": [{"display_url": "https://img/cover.jpg", "is_video": True}],
+        }
+        self.assertEqual(instagram_cover_image_urls(post), ["https://img/cover.jpg"])
+
 
 class SocialEnrichmentTests(unittest.TestCase):
     def test_tweet_video_detection(self) -> None:
@@ -159,6 +171,46 @@ class SocialEnrichmentTests(unittest.TestCase):
             resolve_source_nature(has_transcript=False, base_text="caption"),
             SourceNature.WRITTEN,
         )
+
+
+class MediaFormatClassificationTests(unittest.TestCase):
+    def test_priority_video_over_image_over_text(self) -> None:
+        self.assertEqual(
+            classify_social_media_format(has_video=True, has_images=True, has_text=True),
+            MediaFormat.VIDEO,
+        )
+        self.assertEqual(
+            classify_social_media_format(has_video=False, has_images=True, has_text=True),
+            MediaFormat.IMAGE,
+        )
+        self.assertEqual(
+            classify_social_media_format(has_video=False, has_images=False, has_text=True),
+            MediaFormat.TEXT,
+        )
+        self.assertEqual(
+            classify_social_media_format(has_video=False, has_images=False, has_text=False),
+            MediaFormat.UNKNOWN,
+        )
+
+    def test_instagram_media_format_video(self) -> None:
+        post = {"is_video": True, "captions": ["hi"], "images": [{"is_video": True, "src": "v.jpg"}]}
+        self.assertEqual(instagram_media_format(post), MediaFormat.VIDEO)
+
+    def test_instagram_media_format_image(self) -> None:
+        post = {"is_video": False, "images": [{"display_url": "https://img/1.jpg", "is_video": False}]}
+        self.assertEqual(instagram_media_format(post), MediaFormat.IMAGE)
+
+    def test_instagram_media_format_text_only(self) -> None:
+        post = {"is_video": False, "images": [], "captions": ["just words"]}
+        self.assertEqual(instagram_media_format(post), MediaFormat.TEXT)
+
+    def test_tweet_media_format(self) -> None:
+        video_tweet = {"media": [{"type": "video"}], "full_text": "hi"}
+        self.assertEqual(tweet_media_format(video_tweet, "https://x.com/u/status/1"), MediaFormat.VIDEO)
+        photo_tweet = {"media": [{"type": "photo", "url": "https://img/1.jpg"}], "full_text": "hi"}
+        self.assertEqual(tweet_media_format(photo_tweet, "https://x.com/u/status/2"), MediaFormat.IMAGE)
+        text_tweet = {"full_text": "just words"}
+        self.assertEqual(tweet_media_format(text_tweet, "https://x.com/u/status/3"), MediaFormat.TEXT)
 
 
 if __name__ == "__main__":

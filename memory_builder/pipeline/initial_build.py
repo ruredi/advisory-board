@@ -24,9 +24,12 @@ from memory_builder.pipeline.fatal_errors import (
     PipelineFatalError,
     is_transient_error,
 )
-from memory_builder.pipeline.platform_filter import platform_sql_filter, source_url_matches_platform
+from memory_builder.pipeline.platform_filter import media_format_sql_filter, platform_sql_filter, source_url_matches_platform
 from memory_builder.processors import process_source
+from memory_builder.processors.social_media_enrichment import should_reprocess_social_transcript
+from memory_builder.processors.transcript_status import load_source_metadata
 from memory_builder.processors.transcript_storage import load_transcript_segments
+from memory_builder.storage.segment_index import SegmentIndex
 from memory_builder.source_registry import approved_scraper_profiles, load_approved
 from memory_builder.storage.sqlite_store import SQLiteStore, STOP_REASON_FATAL_ERROR, text_hash
 from memory_builder.storage.vector_index import VectorIndex
@@ -60,6 +63,7 @@ class MemoryPipeline:
         limit: int | None = None,
         dry_run: bool = False,
         only_platform: str | None = None,
+        media_format: str | None = None,
         skip_discovery: bool = False,
         discovery_limit: int | None = None,
         reprocess_transcripts: bool = False,
@@ -71,6 +75,7 @@ class MemoryPipeline:
         self.limit = limit
         self.dry_run = dry_run
         self.only_platform = only_platform
+        self.media_format = media_format
         self.skip_discovery = skip_discovery or reprocess_transcripts
         self.discovery_limit = discovery_limit
         self.reprocess_transcripts = reprocess_transcripts
@@ -211,25 +216,40 @@ class MemoryPipeline:
 
     def reset_indexed_transcripts(self, *, platform: str | None = None) -> list[int]:
         platform_clause, platform_params = platform_sql_filter(platform or self.only_platform)
+        media_clause, media_params = media_format_sql_filter(self.media_format)
         conn = self.store.connect()
         rows = conn.execute(
             f"""
-            SELECT id FROM sources
+            SELECT id, source_type, source_url FROM sources
             WHERE persona_id = ? AND status = ?
-              AND source_type IN ('youtube', 'podcast'){platform_clause}
+              AND source_type IN ('youtube', 'podcast', 'social'){platform_clause}{media_clause}
             ORDER BY
                 CASE source_type
                     WHEN 'youtube' THEN 1
                     WHEN 'podcast' THEN 2
-                    ELSE 3
+                    WHEN 'social' THEN 3
+                    ELSE 4
                 END,
                 source_date IS NULL,
                 source_date DESC,
                 id ASC
             """,
-            (self.persona_id, SourceStatus.INDEXED, *platform_params),
+            (self.persona_id, SourceStatus.INDEXED, *platform_params, *media_params),
         ).fetchall()
-        source_ids = [int(row["id"]) for row in rows]
+        source_ids: list[int] = []
+        for row in rows:
+            source_type = str(row["source_type"])
+            source_url = str(row["source_url"])
+            if source_type == "social":
+                metadata = load_source_metadata(self.persona_id, source_url, self.root)
+                if not should_reprocess_social_transcript(
+                    self.persona_id,
+                    source_url,
+                    self.root,
+                    metadata=metadata,
+                ):
+                    continue
+            source_ids.append(int(row["id"]))
         if not source_ids:
             return []
         placeholders = ",".join("?" for _ in source_ids)
@@ -251,7 +271,7 @@ class MemoryPipeline:
         else:
             print(f"reprocess_transcripts_reset={len(reset_ids)}", flush=True)
         if not reset_ids:
-            print("reprocess_transcripts: nincs indexed youtube/podcast forrás", flush=True)
+            print("reprocess_transcripts: nincs indexed spoken forrás", flush=True)
             return
         self.process_pending(source_ids=reset_ids)
 
@@ -270,6 +290,7 @@ class MemoryPipeline:
                 include_failed=include_failed,
                 channel_url=channel_url,
                 platform=platform or self.only_platform,
+                media_format=self.media_format,
                 limit=self.limit,
             )
         total = len(rows)
@@ -329,6 +350,7 @@ class MemoryPipeline:
                             self.root,
                             transcription_model=self.config.transcription_model,
                             source_title=source_title,
+                            channel_url=str(channel_url) if channel_url else "",
                             display_name=self.config.display_name,
                             speaker_names=self.config.speaker_names,
                             speaker_labeled_transcription=self.config.speaker_labeled_transcription,
@@ -341,6 +363,8 @@ class MemoryPipeline:
                             source_title=document.title or source_title,
                             source_date=published_iso,
                             normalized_title=normalize_episode_title(document.title or source_title),
+                            source_nature=document.source_nature,
+                            media_format=document.media_format,
                         )
                         filtered_text = (
                             document.text
@@ -436,12 +460,30 @@ class MemoryPipeline:
                             root=self.root,
                             qdrant_url=self.config.qdrant_url,
                         )
+                        segment_index = SegmentIndex(vector_index)
                         for unit in units:
                             if unit.id and unit.is_new_information:
                                 try:
                                     vector_index.index_unit(unit.id, unit.embedding_text())
                                 except Exception as index_exc:
                                     log.warning("Failed to index unit %s: %s", unit.id, index_exc)
+                        if segments is not None:
+                            try:
+                                indexed_segments = segment_index.index_source_segments(
+                                    source_id=source_id,
+                                    segments=segments,
+                                    source_url=source_url,
+                                    source_title=document.title or source_title,
+                                )
+                                if ctx:
+                                    ctx.event(
+                                        "source_segment_index",
+                                        f"Indexed {indexed_segments} transcript segments",
+                                        source_id=source_id,
+                                        metadata={"segment_count": indexed_segments},
+                                    )
+                            except Exception as index_exc:
+                                log.warning("Failed to index segments for source %s: %s", source_id, index_exc)
                         try:
                             vector_index.index_missing()
                         except Exception as index_exc:

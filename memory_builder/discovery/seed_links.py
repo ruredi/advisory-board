@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from memory_builder.fetch.scrapfly_facebook import is_facebook_post_url, is_facebook_profile_url
-from memory_builder.models import SourceNature, SourceRecord, SourceStatus, SourceType
+from memory_builder.models import MediaFormat, SourceNature, SourceRecord, SourceStatus, SourceType
 from memory_builder.storage.sqlite_store import normalize_url
 
 
@@ -87,6 +87,26 @@ def infer_source_nature(source_type: str, url: str) -> str:
     return SourceNature.UNCERTAIN
 
 
+def infer_media_format(source_type: str, url: str) -> str:
+    """Best-effort media format from URL only (before the post payload is fetched).
+
+    Ambiguous social posts (Instagram /p/, X /status/) stay 'unknown' until
+    processing determines the accurate format from the scraped payload.
+    """
+    lowered = url.lower()
+    if source_type == SourceType.YOUTUBE:
+        return MediaFormat.VIDEO
+    if source_type == SourceType.PODCAST:
+        return MediaFormat.AUDIO
+    if source_type in {SourceType.PDF, SourceType.WEB}:
+        return MediaFormat.TEXT
+    if source_type == SourceType.SOCIAL:
+        if any(token in lowered for token in ("/reel/", "/reels/", "/video/", "/videos/", "/watch/")):
+            return MediaFormat.VIDEO
+        return MediaFormat.UNKNOWN
+    return MediaFormat.UNKNOWN
+
+
 def is_processable_source(url: str, allowed_domains: list[str] | None = None) -> bool:
     host = urlparse(url).netloc.lower().removeprefix("www.")
     path = urlparse(url).path.rstrip("/")
@@ -166,6 +186,7 @@ def discover_seed_sources(persona_id: str, seed_files: list[str]) -> list[Source
                     source_title=url,
                     source_type=source_type,
                     source_nature=infer_source_nature(source_type, url),
+                    media_format=infer_media_format(source_type, url),
                     status=SourceStatus.PENDING,
                 )
             )

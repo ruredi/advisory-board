@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from memory_builder.config import load_persona_config
 from memory_builder.paths import project_root
 from memory_builder.storage.sqlite_store import SQLiteStore
+from memory_builder.storage.segment_index import RetrievedSegment, SegmentIndex
 from memory_builder.storage.vector_index import VectorIndex
 
 
@@ -44,6 +45,7 @@ class MemorySearch:
             qdrant_url=self.config.qdrant_url,
         )
         self.top_k = top_k
+        self.segment_index = SegmentIndex(self.vector_index)
 
     def search(self, query: str) -> list[RetrievedUnit]:
         hits = self.vector_index.search(query, top_k=self.top_k)
@@ -83,17 +85,31 @@ class MemorySearch:
             )
         return results
 
+    def search_segments(self, query: str, *, top_k: int | None = None) -> list[RetrievedSegment]:
+        return self.segment_index.search(query, top_k=top_k or self.top_k)
+
 
 def build_context_pack(persona_id: str, question: str, root=None, top_k: int = 6) -> str:
     search = MemorySearch(persona_id, root=root, top_k=top_k)
     hits = search.search(question)
-    if not hits:
+    segment_hits = search.search_segments(question, top_k=min(4, top_k))
+    if not hits and not segment_hits:
         return "No indexed source-backed memory was retrieved for this question."
 
     lines = [
         "SOURCE-BACKED MEMORY (use for evidence; do not invent quotes):",
         "",
     ]
+    if segment_hits:
+        lines.append("TRANSCRIPT SEGMENT CONTEXT (surrounding dialogue; not persona quotes unless speaker_type=target):")
+        for index, hit in enumerate(segment_hits, start=1):
+            lines.append(
+                f"[S{index}] {hit.source_title} | {hit.speaker} ({hit.speaker_type}) | segment {hit.segment_id}"
+            )
+            if hit.start_seconds is not None:
+                lines.append(f"Timestamp: {int(hit.start_seconds)}s")
+            lines.append(hit.text[:800])
+            lines.append("")
     for index, hit in enumerate(hits, start=1):
         lines.append(f"[{index}] {hit.source_title}")
         lines.append(f"URL: {hit.source_url}")

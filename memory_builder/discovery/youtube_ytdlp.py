@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from memory_builder.discovery.seed_links import classify_source_type, infer_source_nature
+from memory_builder.discovery.seed_links import classify_source_type, infer_media_format, infer_source_nature
 from memory_builder.discovery.source_emit import OnSourceRecord
 from memory_builder.models import SourceRecord, SourceStatus, SourceType
 from memory_builder.storage.sqlite_store import normalize_url
@@ -145,6 +145,7 @@ def discover_youtube_channel_ytdlp(
             source_type=SourceType.YOUTUBE,
             source_date=published,
             source_nature=infer_source_nature(SourceType.YOUTUBE, link),
+            media_format=infer_media_format(SourceType.YOUTUBE, link),
             status=SourceStatus.PENDING,
             channel_url=meta_url,
         )

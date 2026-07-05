@@ -51,6 +51,7 @@ def _build_pipeline(args: argparse.Namespace) -> MemoryPipeline:
         limit=args.limit,
         dry_run=args.dry_run,
         only_platform=args.only,
+        media_format=args.media,
         skip_discovery=args.skip_discovery,
         discovery_limit=args.discovery_limit,
         reprocess_transcripts=args.reprocess_transcripts,

@@ -15,6 +15,7 @@ from memory_builder.discovery.profile_urls import (
 )
 from memory_builder.discovery.seed_links import (
     classify_source_type,
+    infer_media_format,
     infer_source_nature,
     is_processable_source,
     is_social_post_url,
@@ -372,6 +373,7 @@ def _register_content(
             source_title=resolved.title,
             source_type=resolved.source_type,
             source_nature=infer_source_nature(resolved.source_type, resolved.normalized_url),
+            media_format=infer_media_format(resolved.source_type, resolved.normalized_url),
             status=SourceStatus.PENDING,
             channel_url=resolved.channel_url,
         )

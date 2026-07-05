@@ -29,7 +29,7 @@ from memory_builder.submissions.link_submit import analyze_submitted_link, submi
 from memory_builder.config import load_persona_config
 from memory_builder.models import SourceStatus
 from memory_builder.paths import project_root
-from memory_builder.pipeline.platform_filter import platform_sql_filter
+from memory_builder.pipeline.platform_filter import media_format_sql_filter, platform_sql_filter
 from memory_builder.processors.transcript_status import (
     TRANSCRIPT_VARIANTS,
     list_transcript_variants,
@@ -125,6 +125,14 @@ def submit_source_link(body: SourceLinkSubmitRequest) -> SourceLinkSubmitRespons
     )
 
 
+def _row_media_format(row) -> str:
+    try:
+        value = row["media_format"]
+    except (IndexError, KeyError):
+        return "unknown"
+    return str(value) if value else "unknown"
+
+
 def _source_item(row) -> SourceItem:
     source_type = str(row["source_type"])
     source_url = str(row["source_url"])
@@ -141,6 +149,7 @@ def _source_item(row) -> SourceItem:
         error_message=row["error_message"],
         processed_at=row["processed_at"],
         platform=platform_label(source_type, source_url, channel_url=channel_url),
+        media_format=_row_media_format(row),
     )
 
 
@@ -149,6 +158,7 @@ def list_sources(
     persona_id: str,
     status: str | None = None,
     platform: str | None = None,
+    media: str | None = None,
     search: str | None = None,
     limit: int = Query(default=100, le=500),
 ) -> list[SourceItem]:
@@ -164,6 +174,9 @@ def list_sources(
         platform_clause, platform_params = platform_sql_filter(platform)
         query += platform_clause
         params.extend(platform_params)
+        media_clause, media_params = media_format_sql_filter(media)
+        query += media_clause
+        params.extend(media_params)
         query += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
         rows = store.connect().execute(query, params).fetchall()

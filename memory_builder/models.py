@@ -30,6 +30,16 @@ class SourceNature(StrEnum):
     UNCERTAIN = "uncertain"
 
 
+class MediaFormat(StrEnum):
+    """Primary media modality of a source (text < image < video < audio priority)."""
+
+    TEXT = "text"
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
+    UNKNOWN = "unknown"
+
+
 class ContentType(StrEnum):
     PRINCIPLE = "principle"
     FRAMEWORK = "framework"
@@ -125,6 +135,7 @@ class SourceRecord:
     status: str = SourceStatus.PENDING
     speaker: str | None = None
     source_nature: str = SourceNature.UNCERTAIN
+    media_format: str = MediaFormat.UNKNOWN
     raw_path: str | None = None
     error_message: str | None = None
     channel_url: str | None = None
@@ -178,6 +189,7 @@ class ProcessedDocument:
     title: str
     text: str
     source_nature: str = SourceNature.UNCERTAIN
+    media_format: str = MediaFormat.UNKNOWN
     metadata: dict[str, Any] = field(default_factory=dict)
     visual_assets: list[dict[str, Any]] = field(default_factory=list)
 

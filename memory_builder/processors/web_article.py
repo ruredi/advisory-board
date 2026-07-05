@@ -6,7 +6,7 @@ import httpx
 import trafilatura
 
 from memory_builder.fetch.downloader import fetch_url, save_json_metadata, save_raw_bytes, source_slug
-from memory_builder.models import ProcessedDocument, SourceNature
+from memory_builder.models import MediaFormat, ProcessedDocument, SourceNature
 from memory_builder.paths import sources_processed_dir, sources_raw_dir
 
 
@@ -49,5 +49,6 @@ def process_web_article(persona_id: str, source_url: str, root: Path | None = No
         title=title,
         text=extracted,
         source_nature=SourceNature.WRITTEN,
+        media_format=MediaFormat.TEXT,
         metadata={"source_url": source_url, "content_type": headers.get("content-type", "")},
     )

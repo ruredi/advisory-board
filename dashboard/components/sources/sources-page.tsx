@@ -69,6 +69,15 @@ const PLATFORM_FILTER_TO_API: Record<string, string> = {
   Web: "web",
 };
 
+const MEDIA_FORMAT_ORDER = ["text", "image", "video", "audio"] as const;
+const MEDIA_FORMAT_LABELS: Record<string, string> = {
+  text: "Szöveg",
+  image: "Kép",
+  video: "Videó",
+  audio: "Hang",
+  unknown: "Ismeretlen",
+};
+
 function StatusChip({
   status,
   count,
@@ -221,6 +230,7 @@ export function SourcesPageClient({ personaId }: { personaId: string }) {
   );
   const [status, setStatus] = useState("");
   const [platform, setPlatform] = useState("");
+  const [media, setMedia] = useState("");
   const [search, setSearch] = useState("");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [addLinkOpen, setAddLinkOpen] = useState(false);
@@ -238,7 +248,7 @@ export function SourcesPageClient({ personaId }: { personaId: string }) {
     return pipelineActive || hasActiveSources ? 2000 : false;
   };
 
-  const sourcesQueryKey = ["sources", personaId, status, platform, search] as const;
+  const sourcesQueryKey = ["sources", personaId, status, platform, media, search] as const;
   const getSourcesPollInterval = () =>
     sourcesPollInterval(queryClient.getQueryData<SourceItem[]>(sourcesQueryKey) ?? []);
 
@@ -250,7 +260,9 @@ export function SourcesPageClient({ personaId }: { personaId: string }) {
   });
 
   const sourceParams = Object.fromEntries(
-    Object.entries({ status, platform, search, limit: "500" }).filter(([, value]) => Boolean(value))
+    Object.entries({ status, platform, media, search, limit: "500" }).filter(([, value]) =>
+      Boolean(value)
+    )
   );
 
   const sourcesQuery = useQuery({
@@ -271,7 +283,7 @@ export function SourcesPageClient({ personaId }: { personaId: string }) {
     return stats.platforms.find((p) => p.platform === platform)?.status_counts ?? {};
   }, [stats, platform]);
 
-  const hasFilter = Boolean(status || platform || search);
+  const hasFilter = Boolean(status || platform || media || search);
 
   useEffect(() => {
     if (selectedIndex === null || showAllPersonas) return;
@@ -359,6 +371,28 @@ export function SourcesPageClient({ personaId }: { personaId: string }) {
             </SelectContent>
           </Select>
         </div>
+        <div className="flex min-w-40 flex-col gap-1.5">
+          <Label className="text-xs text-muted-foreground">Média</Label>
+          <Select
+            value={media || "__all__"}
+            onValueChange={(value) => {
+              setMedia(value === "__all__" ? "" : value);
+              setSelectedIndex(null);
+            }}
+          >
+            <SelectTrigger className="h-8">
+              <SelectValue placeholder="Minden típus" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">Minden típus</SelectItem>
+              {MEDIA_FORMAT_ORDER.map((mediaKey) => (
+                <SelectItem key={mediaKey} value={mediaKey}>
+                  {MEDIA_FORMAT_LABELS[mediaKey]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {sortSourceStatusEntries(statusCounts).map(([statusKey, count]) => (
             <StatusChip
@@ -386,6 +420,7 @@ export function SourcesPageClient({ personaId }: { personaId: string }) {
             onClick={() => {
               setStatus("");
               setPlatform("");
+              setMedia("");
               setSearch("");
             }}
           >
@@ -552,6 +587,9 @@ export function SourcesPageClient({ personaId }: { personaId: string }) {
                             subtitle={
                               <>
                                 {source.platform}
+                                {source.media_format && source.media_format !== "unknown" ? (
+                                  <span> · {MEDIA_FORMAT_LABELS[source.media_format]}</span>
+                                ) : null}
                                 {source.error_message ? (
                                   <span className="text-red-500"> · {source.error_message}</span>
                                 ) : null}

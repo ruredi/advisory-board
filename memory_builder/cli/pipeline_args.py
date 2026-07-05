@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from memory_builder.pipeline.platform_filter import SUPPORTED_PLATFORMS
+from memory_builder.pipeline.platform_filter import SUPPORTED_MEDIA_FORMATS, SUPPORTED_PLATFORMS
 
 
 def add_pipeline_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -11,6 +11,12 @@ def add_pipeline_run_arguments(parser: argparse.ArgumentParser) -> None:
         choices=sorted(SUPPORTED_PLATFORMS),
         default=None,
         help="Process only this platform (youtube, spotify, x, instagram, web)",
+    )
+    parser.add_argument(
+        "--media",
+        choices=sorted(SUPPORTED_MEDIA_FORMATS),
+        default=None,
+        help="Process only sources with this media format (text, image, video, audio)",
     )
     parser.add_argument(
         "--skip-discovery",

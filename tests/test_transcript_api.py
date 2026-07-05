@@ -18,7 +18,6 @@ def client(tmp_path, monkeypatch):
     processed = tmp_path / "processed" / "slug123"
     processed.mkdir(parents=True)
     (processed / "document.txt").write_text("Alex Hormozi:\nHello world", encoding="utf-8")
-    (processed / "transcript_labeled.txt").write_text("Alex Hormozi:\nHello world", encoding="utf-8")
     (processed / "transcript_segments.json").write_text(
         json.dumps(
             {
@@ -127,7 +126,19 @@ def test_source_detail_includes_transcript_status(client):
     assert response.status_code == 200
     body = response.json()
     assert body["transcript_status"] == "labeled"
+    variants = {item["key"]: item for item in body["transcript_variants"]}
+    assert variants["segments"]["available"] is True
+    assert variants["labeled"]["available"] is True
     assert any(variant["key"] == "document" for variant in body["transcript_variants"])
+
+
+def test_labeled_variant_runtime_render_without_legacy_file(client):
+    source_id = client.test_source_id
+    response = client.get(f"/personas/hormozi/sources/{source_id}/transcripts/labeled")
+    assert response.status_code == 200
+    body = response.json()
+    assert "Alex Hormozi:" in body["text"]
+    assert "Hello world" in body["text"]
 
 
 def test_source_segments_endpoint(client):

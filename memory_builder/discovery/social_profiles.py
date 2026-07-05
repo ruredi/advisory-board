@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from memory_builder.discovery.seed_links import classify_source_type, infer_source_nature
+from memory_builder.discovery.seed_links import classify_source_type, infer_media_format, infer_source_nature
 from memory_builder.discovery.source_emit import OnSourceRecord, emit_source_record
 from memory_builder.discovery.watermarks import bootstrap_profile_floor_watermark, bootstrap_profile_watermark, parse_twitter_created_at, parse_unix_timestamp
 from memory_builder.fetch.async_utils import run_async
@@ -12,7 +12,8 @@ from memory_builder.fetch.scrapfly_client import get_scrapfly_key
 from memory_builder.fetch.scrapfly_facebook import collect_facebook_posts, facebook_post_public_url
 from memory_builder.fetch.scrapfly_instagram import discover_instagram_posts, instagram_post_url
 from memory_builder.fetch.scrapfly_twitter import scrape_profile_tweets_since, tweet_public_url
-from memory_builder.models import SourceRecord, SourceStatus
+from memory_builder.models import MediaFormat, SourceRecord, SourceStatus
+from memory_builder.processors.social_media_enrichment import instagram_media_format, tweet_media_format
 from memory_builder.pipeline.platform_filter import social_profile_matches_filter
 from memory_builder.storage.sqlite_store import normalize_url
 from memory_builder.telemetry.discovery_events import discovery_log
@@ -166,6 +167,7 @@ def discover_social_sources(
                             channel_url=profile_channel,
                             source_date=source_date,
                             source_title=(tweet.get("text") or post_url)[:200],
+                            media_format=tweet_media_format(tweet, post_url),
                         )
                     ):
                         break
@@ -187,6 +189,7 @@ def discover_social_sources(
                             channel_url=profile_channel,
                             source_date=source_date,
                             source_title=_instagram_title(post),
+                            media_format=instagram_media_format(post),
                         )
                     ):
                         return False
@@ -270,6 +273,7 @@ def _social_source_record(
     channel_url: str,
     source_date: str | None = None,
     source_title: str | None = None,
+    media_format: str | None = None,
 ) -> SourceRecord:
     source_type = classify_source_type(post_url)
     return SourceRecord(
@@ -279,6 +283,7 @@ def _social_source_record(
         source_type=source_type,
         source_date=source_date,
         source_nature=infer_source_nature(source_type, post_url),
+        media_format=media_format or infer_media_format(source_type, post_url),
         status=SourceStatus.PENDING,
         channel_url=channel_url,
     )

@@ -12,7 +12,10 @@ from memory_builder.fetch.downloader import save_json_metadata, save_raw_bytes, 
 from memory_builder.gemini_client import build_gemini_client
 from memory_builder.models import ProcessedDocument, SourceNature
 from memory_builder.paths import project_root, sources_processed_dir
-from memory_builder.processors.transcript_pipeline import build_diarized_document_text
+from memory_builder.processors.transcript_pipeline import (
+    build_diarized_document_text,
+    build_text_attributed_document_text,
+)
 from memory_builder.telemetry.context import get_run_context
 
 
@@ -142,22 +145,46 @@ def process_podcast(
     }
 
     if speaker_labeled_transcription and display_name:
-        extraction_input, segments, artifact_paths = build_diarized_document_text(
-            audio_path=audio_path,
-            transcription_model=transcription_model,
-            display_name=display_name,
-            speaker_names=speaker_names or [],
-            processed_dir=processed_dir,
-        )
-        metadata.update(
-            {
-                "transcription_mode": "diarized",
-                "segment_count": len(segments.segments),
-                "target_segment_count": sum(1 for segment in segments.segments if segment.speaker_type == "target"),
-                **{f"path_{key}": value for key, value in artifact_paths.items()},
-            }
-        )
-        transcript = extraction_input
+        try:
+            extraction_input, segments, artifact_paths = build_diarized_document_text(
+                audio_path=audio_path,
+                transcription_model=transcription_model,
+                display_name=display_name,
+                speaker_names=speaker_names or [],
+                processed_dir=processed_dir,
+                source_context=f"Title: {metadata['title']}\nURL: {source_url}",
+            )
+            metadata.update(
+                {
+                    "transcription_mode": "diarized",
+                    "attribution_mode": "audio_diarized",
+                    "segment_count": len(segments.segments),
+                    "target_segment_count": sum(1 for segment in segments.segments if segment.speaker_type == "target"),
+                    **{f"path_{key}": value for key, value in artifact_paths.items()},
+                }
+            )
+            transcript = extraction_input
+        except Exception as exc:
+            plain = transcribe_audio_with_gemini(audio_path, transcription_model)
+            extraction_input, segments, artifact_paths = build_text_attributed_document_text(
+                raw_transcript=plain,
+                transcription_model=transcription_model,
+                display_name=display_name,
+                speaker_names=speaker_names or [],
+                processed_dir=processed_dir,
+                source_context=f"Title: {metadata['title']}\nURL: {source_url}",
+            )
+            metadata.update(
+                {
+                    "transcription_mode": "text_attributed",
+                    "attribution_mode": "text_attributed",
+                    "diarization_error": str(exc),
+                    "segment_count": len(segments.segments),
+                    "target_segment_count": sum(1 for segment in segments.segments if segment.speaker_type == "target"),
+                    **{f"path_{key}": value for key, value in artifact_paths.items()},
+                }
+            )
+            transcript = extraction_input
     else:
         transcript = transcribe_audio_with_gemini(audio_path, transcription_model)
         metadata["transcription_mode"] = "plain"
@@ -170,6 +197,7 @@ def process_podcast(
         title=doc_title,
         text=transcript,
         source_nature=SourceNature.NATURAL_SPOKEN,
+        media_format=MediaFormat.AUDIO,
         metadata=metadata,
     )
 

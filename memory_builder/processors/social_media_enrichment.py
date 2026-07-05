@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import mimetypes
 import os
@@ -15,7 +16,7 @@ import httpx
 from memory_builder.env import load_project_env
 from memory_builder.fetch.downloader import fetch_url, save_raw_bytes
 from memory_builder.fetch.supadata_client import fetch_transcript, normalize_supadata_url
-from memory_builder.models import SourceNature
+from memory_builder.models import MediaFormat, SourceNature
 
 
 log = logging.getLogger(__name__)
@@ -79,6 +80,29 @@ def instagram_image_urls(post: dict[str, Any]) -> list[str]:
     return urls
 
 
+def instagram_cover_image_urls(post: dict[str, Any]) -> list[str]:
+    """Cover/thumbnail frames for video posts — used for OCR when audio is unavailable."""
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: object) -> None:
+        if not url:
+            return
+        value = str(url)
+        if value not in seen:
+            seen.add(value)
+            urls.append(value)
+
+    if post.get("is_video"):
+        add(post.get("src"))
+    for item in post.get("images") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("is_video"):
+            add(item.get("display_url") or item.get("src"))
+    return urls
+
+
 def tweet_has_video(tweet: dict[str, Any], source_url: str) -> bool:
     for item in tweet.get("media") or []:
         if isinstance(item, dict) and str(item.get("type") or "").lower() == "video":
@@ -110,12 +134,96 @@ def facebook_has_video(source_url: str) -> bool:
     return any(token in lowered for token in ("/reel/", "/reels/", "/videos/", "/watch/"))
 
 
+def is_social_video_reprocess_url(source_url: str) -> bool:
+    lowered = source_url.lower()
+    if any(token in lowered for token in ("/reel/", "/reels/", "/video/", "/videos/", "/watch/")):
+        return True
+    if "instagram.com" in lowered and "/p/" not in lowered:
+        return "/reel/" in lowered
+    return False
+
+
+def should_reprocess_social_transcript(
+    persona_id: str,
+    source_url: str,
+    root: Path | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> bool:
+    """True when a social source should use the spoken transcript reprocess path."""
+    from memory_builder.fetch.downloader import source_slug
+    from memory_builder.paths import project_root, sources_processed_dir, sources_raw_dir
+
+    meta = metadata if metadata is not None else {}
+    if meta.get("transcription_provider") == "supadata":
+        return True
+    if meta.get("attribution_mode") in {"audio_diarized", "text_attributed"}:
+        return True
+    if meta.get("transcription_mode") in {"diarized", "text_attributed"}:
+        return True
+    if is_social_video_reprocess_url(source_url):
+        return True
+
+    base_root = root or project_root()
+    slug = source_slug(source_url)
+    processed_dir = sources_processed_dir(persona_id, base_root) / slug
+    if (processed_dir / "transcript_segments.json").exists() or (processed_dir / "raw_transcript.txt").exists():
+        return True
+
+    raw_social = sources_raw_dir(persona_id, base_root) / slug / "social.json"
+    if raw_social.exists():
+        try:
+            payload = json.loads(raw_social.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        post = payload.get("post") if isinstance(payload, dict) else None
+        if isinstance(post, dict):
+            if post.get("is_video"):
+                return True
+            if instagram_has_video(post):
+                return True
+            if tweet_has_video(post, source_url):
+                return True
+        if facebook_has_video(source_url):
+            return True
+    return False
+
+
 def resolve_source_nature(*, has_transcript: bool, base_text: str) -> str:
     if has_transcript:
         return SourceNature.NATURAL_SPOKEN
     if base_text.strip():
         return SourceNature.WRITTEN
     return SourceNature.UNCERTAIN
+
+
+def classify_social_media_format(*, has_video: bool, has_images: bool, has_text: bool) -> str:
+    """Primary media modality of a social post. Priority: video > image > text."""
+    if has_video:
+        return MediaFormat.VIDEO
+    if has_images:
+        return MediaFormat.IMAGE
+    if has_text:
+        return MediaFormat.TEXT
+    return MediaFormat.UNKNOWN
+
+
+def instagram_media_format(post: dict[str, Any]) -> str:
+    has_text = bool(post.get("caption") or post.get("captions"))
+    return classify_social_media_format(
+        has_video=instagram_has_video(post),
+        has_images=bool(instagram_image_urls(post)),
+        has_text=has_text,
+    )
+
+
+def tweet_media_format(tweet: dict[str, Any], source_url: str) -> str:
+    has_text = bool(str(tweet.get("full_text") or tweet.get("text") or "").strip())
+    return classify_social_media_format(
+        has_video=tweet_has_video(tweet, source_url),
+        has_images=bool(tweet_image_urls(tweet)),
+        has_text=has_text,
+    )
 
 
 def maybe_fetch_video_transcript(source_url: str, *, has_video: bool) -> tuple[str | None, dict[str, Any]]:
@@ -128,8 +236,12 @@ def maybe_fetch_video_transcript(source_url: str, *, has_video: bool) -> tuple[s
             "transcription_url": normalize_supadata_url(source_url),
         }
     except Exception as exc:
-        log.warning("Supadata transcript failed for %s: %s", source_url, exc)
-        return None, {"transcription_error": str(exc)}
+        message = str(exc)
+        if "no audio track" in message.lower():
+            log.info("Supadata skipped (no audio track) for %s", source_url)
+        else:
+            log.warning("Supadata transcript failed for %s: %s", source_url, exc)
+        return None, {"transcription_error": message}
 
 
 def _openai_api_key() -> str:

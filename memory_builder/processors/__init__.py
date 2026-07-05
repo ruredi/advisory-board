@@ -18,6 +18,7 @@ def process_source(
     *,
     transcription_model: str = "gemini-2.5-flash",
     source_title: str = "",
+    channel_url: str = "",
     display_name: str = "",
     speaker_names: list[str] | None = None,
     speaker_labeled_transcription: bool = False,
@@ -37,7 +38,17 @@ def process_source(
     elif source_type == SourceType.PDF:
         document = process_pdf(persona_id, source_url, root)
     elif source_type == SourceType.SOCIAL and social_platform(source_url):
-        document = process_social_post(persona_id, source_url, root)
+        document = process_social_post(
+            persona_id,
+            source_url,
+            root,
+            transcription_model=transcription_model,
+            source_title=source_title,
+            display_name=display_name,
+            speaker_names=speaker_names,
+            speaker_labeled_transcription=speaker_labeled_transcription,
+            channel_url=channel_url,
+        )
     elif source_type == SourceType.PODCAST and is_podcast_audio_url(source_url):
         document = process_podcast(
             persona_id,

@@ -128,6 +128,7 @@ export interface SourceItem {
   error_message: string | null;
   processed_at: string | null;
   platform: string;
+  media_format: string;
 }
 
 export interface SourceDetail extends SourceItem {

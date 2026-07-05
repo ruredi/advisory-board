@@ -193,6 +193,109 @@ def render_labeled_transcript(segments: TranscriptSegments) -> str:
     return "\n\n".join(blocks)
 
 
+def build_text_attribution_prompt(
+    display_name: str,
+    speaker_names: list[str],
+    *,
+    post_context: str = "",
+    source_context: str = "",
+) -> str:
+    aliases = ", ".join(dict.fromkeys([display_name, *speaker_names]))
+    context_blocks: list[str] = []
+    if post_context.strip():
+        context_blocks.append(f"Post/caption context (not spoken transcript):\n{post_context.strip()}")
+    if source_context.strip():
+        context_blocks.append(f"Source context:\n{source_context.strip()}")
+    context_section = "\n\n".join(context_blocks)
+    context_note = (
+        f"\n\nAdditional context for speaker identification (do not merge into transcript segments):\n{context_section}"
+        if context_section
+        else ""
+    )
+    return f"""Segment this transcript text for a knowledge indexing pipeline.
+
+Return ONLY valid JSON with this shape:
+{{
+  "segments": [
+    {{
+      "segment_id": "seg-1",
+      "speaker": "{display_name}",
+      "speaker_type": "target",
+      "text": "verbatim text from transcript",
+      "start_seconds": null,
+      "end_seconds": null,
+      "confidence": "strong"
+    }}
+  ]
+}}
+
+Rules:
+- Input is a plain transcript without reliable speaker labels. Infer speaker turns from dialogue cues.
+- Identify the target person as "{display_name}" when confident. Aliases: {aliases}.
+- Label all other speakers as "Speaker 1", "Speaker 2", etc. Keep speaker IDs consistent across turns.
+- Use speaker_type "target" only for {display_name}. Use "other" for hosts/interviewers/guests/audience. Use "unknown" when unsure.
+- One speaker turn per segment. Do not summarize. Preserve exact wording from the transcript.
+- If the transcript appears to be a single speaker on an official account with no clear alternation, you may use one target segment with confidence "medium".
+- Do not invent content that is not in the transcript.{context_note}
+
+Transcript text:
+"""
+
+
+def attribute_transcript_text_with_gemini(
+    raw_transcript: str,
+    model: str,
+    display_name: str,
+    speaker_names: list[str],
+    *,
+    post_context: str = "",
+    source_context: str = "",
+) -> TranscriptSegments:
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY or GEMINI_API_KEY is required for text speaker attribution")
+
+    cleaned = raw_transcript.strip()
+    if not cleaned:
+        raise RuntimeError("Cannot attribute empty transcript text")
+
+    from google.genai import types
+
+    client = build_gemini_client(api_key, timeout_ms=300_000)
+    prompt = build_text_attribution_prompt(
+        display_name,
+        speaker_names,
+        post_context=post_context,
+        source_context=source_context,
+    )
+    response = client.models.generate_content(
+        model=model,
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=f"{prompt}{cleaned}")])],
+        config={"response_mime_type": "application/json", "response_schema": SEGMENT_SCHEMA},
+    )
+    payload = _parse_json_object(response.text or "{}")
+    segments = TranscriptSegments.from_dict(payload)
+    segments.display_name = display_name
+    segments.transcription_mode = "text_attributed"
+    if not segments.segments:
+        raise RuntimeError("Gemini returned no attributed segments for transcript text")
+
+    ctx = get_run_context()
+    if ctx:
+        ctx.record_gemini(
+            response=response,
+            operation="transcription",
+            model=model,
+            input_modality="text",
+            metadata={
+                "transcript_chars": len(cleaned),
+                "segment_count": len(segments.segments),
+                "transcription_mode": "text_attributed",
+            },
+        )
+    return segments
+
+
 def save_transcript_artifacts(
     processed_dir: Path,
     *,
@@ -201,25 +304,24 @@ def save_transcript_artifacts(
     persona_transcript: str,
     extraction_input: str,
 ) -> dict[str, str]:
-    processed_dir.mkdir(parents=True, exist_ok=True)
-    paths = {
-        "transcript_segments.json": str(processed_dir / "transcript_segments.json"),
-        "transcript_labeled.txt": str(processed_dir / "transcript_labeled.txt"),
-        "document.txt": str(processed_dir / "document.txt"),
-        "persona_transcript.txt": str(processed_dir / "persona_transcript.txt"),
-        "extraction_input.txt": str(processed_dir / "extraction_input.txt"),
-        "transcript.txt": str(processed_dir / "transcript.txt"),
-    }
-    (processed_dir / "transcript_segments.json").write_text(
-        json.dumps(segments.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    from memory_builder.processors.transcript_artifacts import (
+        ATTRIBUTION_AUDIO_DIARIZED,
+        save_spoken_transcript_artifacts,
     )
-    (processed_dir / "transcript_labeled.txt").write_text(labeled_transcript, encoding="utf-8")
-    (processed_dir / "document.txt").write_text(labeled_transcript, encoding="utf-8")
-    (processed_dir / "persona_transcript.txt").write_text(persona_transcript, encoding="utf-8")
-    (processed_dir / "extraction_input.txt").write_text(extraction_input, encoding="utf-8")
-    (processed_dir / "transcript.txt").write_text(extraction_input, encoding="utf-8")
-    return paths
+
+    mode = (
+        ATTRIBUTION_AUDIO_DIARIZED
+        if segments.transcription_mode in {"diarized", ATTRIBUTION_AUDIO_DIARIZED}
+        else segments.transcription_mode or ATTRIBUTION_AUDIO_DIARIZED
+    )
+    raw_transcript = "\n\n".join(segment.text.strip() for segment in segments.segments if segment.text.strip())
+    return save_spoken_transcript_artifacts(
+        processed_dir,
+        segments=segments,
+        raw_transcript=raw_transcript,
+        extraction_input=extraction_input,
+        attribution_mode=mode,
+    )
 
 
 def _optional_float(value: Any) -> float | None:

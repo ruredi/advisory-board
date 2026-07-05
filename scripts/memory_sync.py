@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
         dry_run=False,
         only_platform=args.only,
+        media_format=args.media,
         skip_discovery=args.skip_discovery,
         discovery_limit=args.discovery_limit,
         reprocess_transcripts=args.reprocess_transcripts,

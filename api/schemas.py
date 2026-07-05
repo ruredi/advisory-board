@@ -135,6 +135,7 @@ class SourceItem(BaseModel):
     error_message: str | None
     processed_at: str | None
     platform: str = ""
+    media_format: str = "unknown"
 
 
 class SourceDetail(SourceItem):

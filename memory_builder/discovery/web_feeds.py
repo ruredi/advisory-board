@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 import feedparser
 import httpx
 
-from memory_builder.discovery.seed_links import classify_source_type, infer_source_nature, is_processable_source
+from memory_builder.discovery.seed_links import classify_source_type, infer_media_format, infer_source_nature, is_processable_source
 from memory_builder.discovery.youtube_ytdlp import resolve_youtube_channel_id_ytdlp
 from memory_builder.models import SourceRecord, SourceStatus
 from collections.abc import Callable
@@ -97,6 +97,7 @@ def _parse_rss_feed(
             source_type=source_type,
             source_date=published,
             source_nature=infer_source_nature(source_type, link),
+            media_format=infer_media_format(source_type, link),
             status=SourceStatus.PENDING,
             channel_url=channel_url,
         )
@@ -150,6 +151,7 @@ def _discover_web_links(
             source_type=source_type,
             source_date=last_modified,
             source_nature=infer_source_nature(source_type, normalized),
+            media_format=infer_media_format(source_type, normalized),
             status=SourceStatus.PENDING,
             channel_url=page_url,
         )

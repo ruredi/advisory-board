@@ -5,7 +5,7 @@ from pathlib import Path
 import fitz
 
 from memory_builder.fetch.downloader import fetch_url, save_json_metadata, save_raw_bytes, source_slug
-from memory_builder.models import ProcessedDocument, SourceNature
+from memory_builder.models import MediaFormat, ProcessedDocument, SourceNature
 from memory_builder.paths import sources_processed_dir
 
 
@@ -73,6 +73,7 @@ def process_pdf(persona_id: str, source_url: str, root: Path | None = None) -> P
         title=title,
         text=full_text,
         source_nature=SourceNature.WRITTEN,
+        media_format=MediaFormat.TEXT,
         metadata={"page_count": doc.page_count, "source_url": source_url},
         visual_assets=visual_assets,
     )
